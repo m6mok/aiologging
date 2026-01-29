@@ -1,0 +1,156 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[dev]
+
+    - name: Lint with flake8
+      run: |
+        pip install flake8
+        # Stop the build if there are Python syntax errors or undefined names
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        # Exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+    - name: Type check with mypy
+      run: |
+        mypy aiologging
+
+    - name: Test with pytest
+      run: |
+        pytest --cov=aiologging --cov-report=xml --cov-report=term-missing
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
+
+  integration-test:
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[all]
+
+    - name: Test basic functionality
+      run: |
+        python -c "
+        import asyncio
+        import aiologging
+
+        async def test():
+            async with aiologging.getLogger('test') as logger:
+                await logger.info('Test message')
+                print('Basic functionality test passed')
+
+        asyncio.run(test())
+        "
+
+    - name: Test file handler
+      run: |
+        python -c "
+        import asyncio
+        import aiologging
+        import os
+
+        async def test():
+            async with aiologging.getLogger('test') as logger:
+                handler = aiologging.AsyncFileHandler('test.log')
+                logger.addHandler(handler)
+                await logger.info('Test file message')
+                await handler.close()
+
+                # Check if file exists and has content
+                if os.path.exists('test.log') and os.path.getsize('test.log') > 0:
+                    print('File handler test passed')
+                else:
+                    raise Exception('File handler test failed')
+
+        asyncio.run(test())
+        "
+
+    - name: Test HTTP handler
+      run: |
+        python -c "
+        import asyncio
+        import aiologging
+
+        async def test():
+            try:
+                async with aiologging.getLogger('test') as logger:
+                    handler = aiologging.AsyncHttpHandler('https://httpbin.org/post')
+                    logger.addHandler(handler)
+                    await logger.info('Test HTTP message')
+                    await handler.close()
+                    print('HTTP handler test passed')
+            except Exception as e:
+                print(f'HTTP handler test failed: {e}')
+
+        asyncio.run(test())
+        "
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [test, integration-test]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+
+    - name: Install build dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install build twine
+
+    - name: Build package
+      run: |
+        python -m build
+
+    - name: Check package
+      run: |
+        twine check dist/*
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: dist
+        path: dist/
