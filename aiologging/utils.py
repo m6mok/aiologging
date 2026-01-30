@@ -29,11 +29,14 @@ from typing import Any, Optional, Callable, Awaitable
 from .types import AsyncErrorHandler
 
 
-def log_error_to_stderr(message: str, exception: Optional[Exception] = None) -> None:
+def log_error_to_stderr(
+    message: str, exception: Optional[Exception] = None
+) -> None:
     """
     Log an error message to stderr with optional exception details.
 
-    This function provides a consistent way to log errors throughout the library.
+    This function provides a consistent way
+    to log errors throughout the library.
     It formats the error message and optionally includes exception information
     and traceback.
 
@@ -68,8 +71,8 @@ async def handle_error_with_fallback(
     Handle an error using the provided error handler or fallback to stderr.
 
     This function provides a consistent error handling pattern throughout the
-    library. It first tries to use the provided error handler, and if that fails
-    or if no handler is provided, it falls back to logging to stderr.
+    library. It first tries to use the provided error handler, and if that
+    fails or if no handler is provided, it falls back to logging to stderr.
 
     Args:
         record: The log record being processed when the error occurred
@@ -86,7 +89,11 @@ async def handle_error_with_fallback(
         ...     # Some operation that might fail
         ...     pass
         ... except Exception as e:
-        ...     await handle_error_with_fallback(record, e, custom_error_handler)
+        ...     await handle_error_with_fallback(
+        ...         record,
+        ...         e,
+        ...         custom_error_handler,
+        ...     )
     """
     if error_handler:
         try:
@@ -94,8 +101,7 @@ async def handle_error_with_fallback(
         except Exception as handler_error:
             # Avoid infinite recursion if error handler fails
             log_error_to_stderr(
-                f"Error in error handler: {handler_error}",
-                error
+                f"Error in error handler: {handler_error}", error
             )
     else:
         # Default error handling
@@ -111,7 +117,8 @@ def safe_format_exception(exc_info: Any) -> str:
     them safely, without raising exceptions during the formatting process.
 
     Args:
-        exc_info: Exception information from sys.exc_info() or LogRecord.exc_info
+        exc_info: Exception information from sys.exc_info()
+                  or LogRecord.exc_info
 
     Returns:
         Formatted exception string, or an error message if formatting fails
@@ -131,11 +138,13 @@ def safe_format_exception(exc_info: Any) -> str:
         if isinstance(exc_info, tuple) and len(exc_info) == 3:
             # Standard exc_info tuple (type, value, traceback)
             return traceback.format_exception(*exc_info)[-1]
-        elif hasattr(exc_info, '__traceback__'):
+        elif hasattr(exc_info, "__traceback__"):
             # Exception instance
-            return "".join(traceback.format_exception(
-                type(exc_info), exc_info, exc_info.__traceback__
-            ))
+            return "".join(
+                traceback.format_exception(
+                    type(exc_info), exc_info, exc_info.__traceback__
+                )
+            )
         else:
             # Fallback for other types
             return str(exc_info)
@@ -177,8 +186,10 @@ class ErrorContext:
 
         Args:
             operation: Description of the operation being performed
-            error_handler: Optional error handler to use for custom error handling
-            fallback_message: Optional custom fallback message for stderr logging
+            error_handler: Optional error handler to use
+                           for custom error handling
+            fallback_message: Optional custom fallback message
+                              for stderr logging
             reraise: Whether to reraise the exception after handling it
         """
         self.operation = operation
@@ -208,7 +219,9 @@ class ErrorContext:
         """
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> bool:
+    async def __aexit__(
+        self, exc_type: Any, exc_val: Any, exc_tb: Any
+    ) -> bool:
         """
         Exit the error context and handle any exceptions.
 
@@ -224,7 +237,10 @@ class ErrorContext:
             error = exc_val
             if self.record:
                 await handle_error_with_fallback(
-                    self.record, error, self.error_handler, self.fallback_message
+                    self.record,
+                    error,
+                    self.error_handler,
+                    self.fallback_message,
                 )
             else:
                 log_error_to_stderr(self.fallback_message, error)
@@ -236,7 +252,7 @@ class ErrorContext:
 
 
 def create_error_handler(
-    handler_func: Callable[[LogRecord, Exception], Awaitable[None]]
+    handler_func: Callable[[LogRecord, Exception], Awaitable[None]],
 ) -> AsyncErrorHandler:
     """
     Create a properly typed error handler from a function.

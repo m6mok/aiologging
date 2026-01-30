@@ -21,7 +21,7 @@ from .base import AsyncHandler
 class AsyncStreamWriter(Protocol):
     """Protocol for async stream writers."""
 
-    def write(self, data: bytes) -> None: ...
+    async def write(self, data: bytes) -> None: ...
 
     async def drain(self) -> None: ...
 
@@ -52,7 +52,9 @@ class AsyncStreamHandler(AsyncHandler):
 
     def __init__(
         self,
-        stream: Optional[Union[TextIO, AsyncStreamWriter, AsyncTextWriter, SyncWriter]] = None,
+        stream: Optional[
+            Union[TextIO, AsyncStreamWriter, AsyncTextWriter, SyncWriter]
+        ] = None,
         level: int = NOTSET,
         formatter: Optional[FormatterProtocol] = None,
         filters: Optional[list[FilterProtocol]] = None,
@@ -81,7 +83,9 @@ class AsyncStreamHandler(AsyncHandler):
         self.encoding = encoding
         self.errors = errors or "strict"
         # Check if it's an asyncio.StreamWriter by checking for drain method
-        self._is_async_stream = hasattr(stream, 'drain') and hasattr(stream, 'write')
+        self._is_async_stream = hasattr(stream, "drain") and hasattr(
+            stream, "write"
+        )
         self._write_lock = asyncio.Lock()
 
     async def _emit(self, record: LogRecord, formatted_message: str) -> None:
@@ -100,15 +104,21 @@ class AsyncStreamHandler(AsyncHandler):
             stream = self.stream
 
             # Ensure the message ends with a newline
-            if not msg.endswith('\n'):
-                msg += '\n'
+            if not msg.endswith("\n"):
+                msg += "\n"
 
             async with self._write_lock:
-                if self._is_async_stream and isinstance(stream, AsyncStreamWriter):
+                if self._is_async_stream and isinstance(
+                    stream, AsyncStreamWriter
+                ):
                     # Handle asyncio.StreamWriter
-                    msg_bytes = msg.encode(self.encoding, self.errors) if isinstance(msg, str) else msg
+                    msg_bytes = (
+                        msg.encode(self.encoding, self.errors)
+                        if isinstance(msg, str)
+                        else msg
+                    )
 
-                    stream.write(msg_bytes)
+                    await stream.write(msg_bytes)
                     await stream.drain()
                 elif isinstance(stream, AsyncTextWriter):
                     # Handle async text writer
@@ -119,7 +129,7 @@ class AsyncStreamHandler(AsyncHandler):
                     await loop.run_in_executor(None, stream.write, msg)
 
                     # Flush if the stream has a flush method
-                    if hasattr(stream, 'flush'):
+                    if hasattr(stream, "flush"):
                         await loop.run_in_executor(None, stream.flush)
                 else:
                     raise HandlerError(
@@ -137,12 +147,13 @@ class AsyncStreamHandler(AsyncHandler):
                 details={
                     "record_level": record.levelname,
                     "record_message": record.getMessage(),
-                    "stream_type": type(self.stream).__name__},
+                    "stream_type": type(self.stream).__name__,
+                },
             ) from e
 
     async def _close_resources(self) -> None:
         """Close the stream if it supports closing."""
-        if hasattr(self.stream, 'close'):
+        if hasattr(self.stream, "close"):
             try:
                 if asyncio.iscoroutinefunction(self.stream.close):
                     await self.stream.close()
@@ -156,11 +167,14 @@ class AsyncStreamHandler(AsyncHandler):
 
     def __repr__(self) -> str:
         """Return a string representation of the handler."""
-        stream_name = getattr(self.stream, 'name', type(self.stream).__name__)
+        stream_name = getattr(self.stream, "name", type(self.stream).__name__)
+        formatter: Union[str, None] = None
+        if self.formatter:
+            formatter = type(self.formatter).__name__
         return (
             f"{self.__class__.__name__}(stream={stream_name}, "
             f"level={self.level}, "
-            f"formatter={type(self.formatter).__name__ if self.formatter else None})"
+            f"formatter={formatter})"
         )
 
 
@@ -195,7 +209,10 @@ class AsyncStandardStreamHandler(AsyncStreamHandler):
         """
         if stream_name not in ("stdout", "stderr"):
             raise HandlerError(
-                f"Invalid stream name: {stream_name}. Must be 'stdout' or 'stderr'",
+                (
+                    f"Invalid stream name: {stream_name}. "
+                    "Must be 'stdout' or 'stderr'"
+                ),
                 handler_name=type(self).__name__,
                 operation="__init__",
                 details={"stream_name": stream_name},
@@ -207,10 +224,13 @@ class AsyncStandardStreamHandler(AsyncStreamHandler):
 
     def __repr__(self) -> str:
         """Return a string representation of the handler."""
+        formatter: Union[str, None] = None
+        if self.formatter:
+            formatter = type(self.formatter).__name__
         return (
             f"{self.__class__.__name__}(stream={self.stream_name}, "
             f"level={self.level}, "
-            f"formatter={type(self.formatter).__name__ if self.formatter else None})"
+            f"formatter={formatter})"
         )
 
 

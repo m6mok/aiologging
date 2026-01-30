@@ -7,6 +7,7 @@ import json
 import logging
 import pytest
 import sys
+from typing import List
 from unittest.mock import AsyncMock, patch
 
 from aiologging.handlers.http import AsyncHttpHandler, AsyncHttpJsonHandler
@@ -198,29 +199,6 @@ class TestAsyncHttpJsonHandler:
             handler.flush.assert_called()
 
     @pytest.mark.asyncio
-    async def test_emit_json_with_custom_fields_mapping(self) -> None:
-        """Test emit with JSON format and custom fields mapping."""
-        with patch("aiohttp.ClientSession") as mock_session_class:
-            mock_session = AsyncMock()
-            mock_session_class.return_value.__aenter__.return_value = mock_session
-
-            mock_response = AsyncMock()
-            mock_response.status = 200
-            mock_session.request.return_value.__aenter__.return_value = mock_response
-
-            # Custom field mapping
-            field_mapping = {
-                "message": "msg",
-                "level": "severity",
-                "name": "logger"
-            }
-
-            # field_mapping is not supported in the current implementation
-            # so we'll skip this test
-            pytest.skip("field_mapping not supported in current implementation")
-            return
-
-    @pytest.mark.asyncio
     async def test_emit_json_with_nested_data(self) -> None:
         """Test emit with JSON format and nested data."""
         handler = AsyncHttpJsonHandler("https://example.com/api/logs")
@@ -246,7 +224,7 @@ class TestAsyncHttpTextHandler:
             msg=message, args=(), exc_info=None
         )
 
-    def _create_test_records(self, *messages: str) -> list[logging.LogRecord]:
+    def _create_test_records(self, *messages: str) -> List[logging.LogRecord]:
         """Create test log records with the given messages."""
         records = []
         for msg in messages:
@@ -308,7 +286,7 @@ class TestAsyncHttpProtoHandler:
             msg=message, args=(), exc_info=None
         )
 
-    def _create_test_records(self, *messages: str) -> list[logging.LogRecord]:
+    def _create_test_records(self, *messages: str) -> List[logging.LogRecord]:
         """Create test log records with the given messages."""
         records = []
         for msg in messages:
@@ -378,7 +356,7 @@ class TestAsyncHttpProtoHandler:
 class TestAsyncHttpHandlerAdvanced:
     """Advanced test cases for AsyncHttpHandler."""
 
-    def _create_test_records(self, *messages: str) -> list[logging.LogRecord]:
+    def _create_test_records(self, *messages: str) -> List[logging.LogRecord]:
         """Create test log records with the given messages."""
         records = []
         for msg in messages:

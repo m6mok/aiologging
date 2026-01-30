@@ -1,8 +1,9 @@
 """
 Configuration management for the aiologging library.
 
-This module provides utilities for managing configuration of loggers and handlers,
-including loading from files, environment variables, and dictionaries.
+This module provides utilities for managing configuration of loggers and
+handlers, including loading from files, environment variables,
+and dictionaries.
 """
 
 from __future__ import annotations
@@ -17,7 +18,10 @@ from .handlers.base import AsyncHandler
 from .handlers.stream import AsyncStreamHandler
 from .handlers.file import AsyncFileHandler
 from .handlers.http import AsyncHttpHandler, AsyncHttpJsonHandler
-from .handlers.rotating import AsyncRotatingFileHandler, AsyncTimedRotatingFileHandler
+from .handlers.rotating import (
+    AsyncRotatingFileHandler,
+    AsyncTimedRotatingFileHandler,
+)
 from .logger import AsyncLogger
 from .types import (
     ConfigValue,
@@ -59,7 +63,9 @@ class ConfigManager:
         self._config: Dict[str, Any] = {}
         self._loggers: Dict[str, AsyncLogger] = {}
 
-    def register_handler(self, name: str, handler_class: Type[AsyncHandler]) -> None:
+    def register_handler(
+        self, name: str, handler_class: Type[AsyncHandler]
+    ) -> None:
         """
         Register a custom handler class.
 
@@ -72,7 +78,9 @@ class ConfigManager:
         """
         self._handler_registry[name] = handler_class
 
-    def register_logger(self, name: str, logger_class: Type[AsyncLogger]) -> None:
+    def register_logger(
+        self, name: str, logger_class: Type[AsyncLogger]
+    ) -> None:
         """
         Register a custom logger class.
 
@@ -136,18 +144,25 @@ class ConfigManager:
         file_path = Path(file_path)
 
         if not file_path.exists():
-            raise ConfigurationError(f"Configuration file not found: {file_path}")
+            raise ConfigurationError(
+                f"Configuration file not found: {file_path}"
+            )
 
         try:
             with open(file_path, "r") as f:
                 if file_path.suffix.lower() == ".json":
                     config = json.load(f)
                 else:
-                    raise ConfigurationError(f"Unsupported configuration file format: {file_path.suffix}")
+                    raise ConfigurationError(
+                        "Unsupported configuration "
+                        f"file format: {file_path.suffix}"
+                    )
 
             self.load_from_dict(config)
         except json.JSONDecodeError as e:
-            raise ConfigurationError(f"Invalid JSON in configuration file: {e}")
+            raise ConfigurationError(
+                f"Invalid JSON in configuration file: {e}"
+            )
         except Exception as e:
             raise ConfigurationError(f"Error loading configuration file: {e}")
 
@@ -190,7 +205,8 @@ class ConfigManager:
 
     def get_logger(self, name: str) -> AsyncLogger:
         """
-        Get a logger with the specified name, configured according to the loaded config.
+        Get a logger with the specified name,
+        configured according to the loaded config.
 
         Args:
             name: Name of the logger
@@ -209,7 +225,9 @@ class ConfigManager:
 
         logger_config = self._config.get("loggers", {}).get(name, {})
         if not logger_config:
-            raise ConfigurationError(f"No configuration found for logger: {name}")
+            raise ConfigurationError(
+                f"No configuration found for logger: {name}"
+            )
 
         # Create the logger
         logger_type = logger_config.get("type", "async")
@@ -233,7 +251,7 @@ class ConfigManager:
             level=level,
             handlers=handlers,
             propagate=logger_config.get("propagate", True),
-            disabled=logger_config.get("disabled", False)
+            disabled=logger_config.get("disabled", False),
         )
 
         self._loggers[name] = logger
@@ -248,7 +266,9 @@ class ConfigManager:
             raise ConfigurationError("Configuration must specify a version")
 
         if self._config["version"] != 1:
-            raise ConfigurationError(f"Unsupported configuration version: {self._config['version']}")
+            raise ConfigurationError(
+                f"Unsupported configuration version: {self._config['version']}"
+            )
 
         if "loggers" not in self._config:
             raise ConfigurationError("Configuration must specify loggers")
@@ -282,7 +302,9 @@ class ConfigManager:
         """Create a handler from the configuration."""
         handler_config = self._config.get("handlers", {}).get(name)
         if not handler_config:
-            raise ConfigurationError(f"No configuration found for handler: {name}")
+            raise ConfigurationError(
+                f"No configuration found for handler: {name}"
+            )
 
         handler_type = handler_config.get("class")
         if not handler_type:
@@ -307,15 +329,23 @@ class ConfigManager:
         elif handler_type == "rotating_file":
             return self._create_rotating_file_handler(handler_config, level)
         elif handler_type == "timed_rotating_file":
-            return self._create_timed_rotating_file_handler(handler_config, level)
+            return self._create_timed_rotating_file_handler(
+                handler_config, level
+            )
         else:
-            raise ConfigurationError(f"Unsupported handler type: {handler_type}")
+            raise ConfigurationError(
+                f"Unsupported handler type: {handler_type}"
+            )
 
-    def _create_stream_handler(self, config: Dict[str, Any], level: int) -> AsyncStreamHandler:
+    def _create_stream_handler(
+        self, config: Dict[str, Any], level: int
+    ) -> AsyncStreamHandler:
         """Create a stream handler from configuration."""
         return AsyncStreamHandler(level=level)
 
-    def _create_file_handler(self, config: Dict[str, Any], level: int) -> AsyncFileHandler:
+    def _create_file_handler(
+        self, config: Dict[str, Any], level: int
+    ) -> AsyncFileHandler:
         """Create a file handler from configuration."""
         filename = config.get("filename")
         if not filename:
@@ -327,10 +357,12 @@ class ConfigManager:
             encoding=config.get("encoding", "utf-8"),
             delay=config.get("delay", False),
             errors=config.get("errors"),
-            level=level
+            level=level,
         )
 
-    def _create_http_handler(self, config: Dict[str, Any], level: int) -> AsyncHttpHandler:
+    def _create_http_handler(
+        self, config: Dict[str, Any], level: int
+    ) -> AsyncHttpHandler:
         """Create an HTTP handler from configuration."""
         url = config.get("url")
         if not url:
@@ -343,10 +375,12 @@ class ConfigManager:
             params=config.get("params"),
             timeout=config.get("timeout", 30.0),
             verify_ssl=config.get("verify_ssl", True),
-            level=level
+            level=level,
         )
 
-    def _create_http_json_handler(self, config: Dict[str, Any], level: int) -> AsyncHttpJsonHandler:
+    def _create_http_json_handler(
+        self, config: Dict[str, Any], level: int
+    ) -> AsyncHttpJsonHandler:
         """Create an HTTP JSON handler from configuration."""
         url = config.get("url")
         if not url:
@@ -359,14 +393,18 @@ class ConfigManager:
             params=config.get("params"),
             timeout=config.get("timeout", 30.0),
             verify_ssl=config.get("verify_ssl", True),
-            level=level
+            level=level,
         )
 
-    def _create_rotating_file_handler(self, config: Dict[str, Any], level: int) -> AsyncRotatingFileHandler:
+    def _create_rotating_file_handler(
+        self, config: Dict[str, Any], level: int
+    ) -> AsyncRotatingFileHandler:
         """Create a rotating file handler from configuration."""
         filename = config.get("filename")
         if not filename:
-            raise ConfigurationError("Rotating file handler must specify a filename")
+            raise ConfigurationError(
+                "Rotating file handler must specify a filename"
+            )
 
         return AsyncRotatingFileHandler(
             filename=filename,
@@ -376,14 +414,18 @@ class ConfigManager:
             errors=config.get("errors"),
             max_bytes=config.get("max_bytes", 0),
             backup_count=config.get("backup_count", 0),
-            level=level
+            level=level,
         )
 
-    def _create_timed_rotating_file_handler(self, config: Dict[str, Any], level: int) -> AsyncTimedRotatingFileHandler:
+    def _create_timed_rotating_file_handler(
+        self, config: Dict[str, Any], level: int
+    ) -> AsyncTimedRotatingFileHandler:
         """Create a timed rotating file handler from configuration."""
         filename = config.get("filename")
         if not filename:
-            raise ConfigurationError("Timed rotating file handler must specify a filename")
+            raise ConfigurationError(
+                "Timed rotating file handler must specify a filename"
+            )
 
         when = config.get("when", "H")
         interval = config.get("interval", 1)
@@ -397,7 +439,7 @@ class ConfigManager:
             when=when,
             interval=interval,
             backup_count=backup_count,
-            level=level
+            level=level,
         )
 
 
@@ -443,8 +485,14 @@ def configure_from_dict(config: Dict[str, Any]) -> None:
     Example:
         >>> config = {
         ...     "version": 1,
-        ...     "loggers": {"myapp": {"level": "INFO", "handlers": ["console"]}},
-        ...     "handlers": {"console": {"class": "stream", "stream": "stdout"}}
+        ...     "loggers": {"myapp": {
+        ...         "level": "INFO",
+        ...         "handlers": ["console"]
+        ...     }},
+        ...     "handlers": {"console": {
+        ...         "class": "stream",
+        ...         "stream": "stdout"
+        ...     }}
         ... }
         >>> configure_from_dict(config)
     """
@@ -453,7 +501,8 @@ def configure_from_dict(config: Dict[str, Any]) -> None:
 
 def configure_from_env(prefix: str = "AIOLogging") -> None:
     """
-    Configure logging from environment variables using the global configuration manager.
+    Configure logging from environment variables
+    using the global configuration manager.
 
     Args:
         prefix: Prefix for environment variables

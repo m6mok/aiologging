@@ -126,8 +126,12 @@ class AsyncLogger:
         self.disabled = disabled
         self._rate_limiter = rate_limiter
         self._enable_metrics = enable_metrics
-        self._record_cache_size = record_cache_size or self._default_record_cache_size
-        self._filter_cache_size = filter_cache_size or self._default_filter_cache_size
+        self._record_cache_size = (
+            record_cache_size or self._default_record_cache_size
+        )
+        self._filter_cache_size = (
+            filter_cache_size or self._default_filter_cache_size
+        )
         self._error_handler = error_handler
 
         self._parent: Optional[AsyncLogger] = None
@@ -235,7 +239,15 @@ class AsyncLogger:
         level: int,
         msg: str,
         *args: Any,
-        exc_info: Optional[Union[bool, tuple[type[BaseException], BaseException, Optional[TracebackType]], tuple[None, None, None]]] = None,
+        exc_info: Optional[
+            Union[
+                bool,
+                tuple[
+                    type[BaseException], BaseException, Optional[TracebackType]
+                ],
+                tuple[None, None, None],
+            ]
+        ] = None,
         extra: Optional[Dict[str, Any]] = None,
         stack_info: bool = False,
     ) -> None:
@@ -315,7 +327,15 @@ class AsyncLogger:
         level: int,
         msg: str,
         args: tuple[Any, ...],
-        exc_info: Optional[Union[bool, tuple[type[BaseException], BaseException, Optional[TracebackType]], tuple[None, None, None]]],
+        exc_info: Optional[
+            Union[
+                bool,
+                tuple[
+                    type[BaseException], BaseException, Optional[TracebackType]
+                ],
+                tuple[None, None, None],
+            ]
+        ],
         extra: Optional[Dict[str, Any]],
         stack_info: bool,
     ) -> LogRecord:
@@ -362,18 +382,40 @@ class AsyncLogger:
         if frame is None:
             return "<unknown>", 0, "<unknown>"
         else:
-            return frame.f_code.co_filename, frame.f_lineno, frame.f_code.co_name
+            return (
+                frame.f_code.co_filename,
+                frame.f_lineno,
+                frame.f_code.co_name,
+            )
 
-    def _add_extra_attributes(self, record: LogRecord, extra: Optional[Dict[str, Any]]) -> None:
+    def _add_extra_attributes(
+        self, record: LogRecord, extra: Optional[Dict[str, Any]]
+    ) -> None:
         """Add extra attributes to the log record."""
         if not extra:
             return
 
         for key, value in extra.items():
-            if key in ["name", "msg", "args", "levelname", "levelno", "pathname",
-                      "filename", "module", "lineno", "funcName", "created",
-                      "msecs", "relativeCreated", "thread", "threadName",
-                      "processName", "process", "getMessage"]:
+            if key in [
+                "name",
+                "msg",
+                "args",
+                "levelname",
+                "levelno",
+                "pathname",
+                "filename",
+                "module",
+                "lineno",
+                "funcName",
+                "created",
+                "msecs",
+                "relativeCreated",
+                "thread",
+                "threadName",
+                "processName",
+                "process",
+                "getMessage",
+            ]:
                 raise KeyError(f"Attempt to overwrite {key!r} in LogRecord")
             setattr(record, key, value)
 
@@ -388,11 +430,13 @@ class AsyncLogger:
     def _format_stack(self, frame: Any) -> str:
         """Format the stack information."""
         import traceback
+
         return "".join(traceback.format_stack(frame))
 
     async def handle(self, record: LogRecord) -> None:
         """
-        Handle a log record with enhanced error handling and performance optimization.
+        Handle a log record with enhanced error handling
+        and performance optimization.
 
         This method applies filters, formats the record, and passes it
         to handlers and parent loggers.
@@ -410,7 +454,7 @@ class AsyncLogger:
                 return
 
             # Set the formatter on the record if the logger has one
-            if self._formatter and not hasattr(record, 'formatter'):
+            if self._formatter and not hasattr(record, "formatter"):
                 record.formatter = self._formatter
 
             # Pass to handlers with enhanced error handling
@@ -435,10 +479,21 @@ class AsyncLogger:
                 )
 
     def _configure_handler(self, handler: Any) -> None:
-        """Configure a handler with default formatter and error handler if needed."""
-        if hasattr(handler, 'formatter') and handler.formatter is None and self._formatter is not None:
+        """
+        Configure a handler with default formatter
+        and error handler if needed.
+        """
+        if (
+            hasattr(handler, "formatter")
+            and handler.formatter is None
+            and self._formatter is not None
+        ):
             handler.formatter = self._formatter
-        if hasattr(handler, 'error_handler') and handler.error_handler is None and self._error_handler is not None:
+        if (
+            hasattr(handler, "error_handler")
+            and handler.error_handler is None
+            and self._error_handler is not None
+        ):
             handler.error_handler = self._error_handler
 
     def _filter(self, record: LogRecord) -> bool:
@@ -458,7 +513,9 @@ class AsyncLogger:
                     result = False
                     break
             except Exception as e:
-                sys.stderr.write(f"Filter error in {type(filter_obj).__name__}: {e}\n")
+                sys.stderr.write(
+                    f"Filter error in {type(filter_obj).__name__}: {e}\n"
+                )
                 result = False
                 break
 
@@ -496,14 +553,19 @@ class AsyncLogger:
                 try:
                     await handler.close()
                 except Exception as e:
-                    sys.stderr.write(f"Error closing handler {type(handler).__name__}: {e}\n")
+                    sys.stderr.write(
+                        "Error closing handler "
+                        f"{type(handler).__name__}: {e}\n"
+                    )
 
             # Close all children
             for child in self._children.values():
                 try:
                     await child.close()
                 except Exception as e:
-                    sys.stderr.write(f"Error closing child logger {child.name}: {e}\n")
+                    sys.stderr.write(
+                        f"Error closing child logger {child.name}: {e}\n"
+                    )
 
         # Clean up references and caches
         self._handlers_refs.clear()
@@ -518,15 +580,17 @@ class AsyncLogger:
             Dictionary containing performance metrics.
         """
         metrics = self._metrics.get_metrics()
-        metrics.update({
-            "record_cache_size": len(self._record_cache),
-            "filter_cache_size": len(self._filter_cache),
-            "handlers_count": len(self.handlers),
-            "filters_count": len(self._filters),
-            "children_count": len(self._children),
-            "closed": self._closed,
-            "disabled": self.disabled,
-        })
+        metrics.update(
+            {
+                "record_cache_size": len(self._record_cache),
+                "filter_cache_size": len(self._filter_cache),
+                "handlers_count": len(self.handlers),
+                "filters_count": len(self._filters),
+                "children_count": len(self._children),
+                "closed": self._closed,
+                "disabled": self.disabled,
+            }
+        )
         return metrics
 
     async def __aenter__(self) -> AsyncLogger:
@@ -539,7 +603,12 @@ class AsyncLogger:
             )
         return self
 
-    async def __aexit__(self, exc_type: Optional[type[BaseException]], exc_val: Optional[BaseException], exc_tb: Optional[TracebackType]) -> None:
+    async def __aexit__(
+        self,
+        exc_type: Optional[type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> None:
         """Async context manager exit."""
         await self.close()
 
@@ -573,7 +642,7 @@ class AsyncLoggerManager:
 
     def __init__(self) -> None:
         """Initialize the logger manager."""
-        if not hasattr(self, '_initialized'):
+        if not hasattr(self, "_initialized"):
             self._loggers: Dict[str, AsyncLogger] = {}
             self._root_logger: Optional[AsyncLogger] = None
             self._initialized = True

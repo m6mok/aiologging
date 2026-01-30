@@ -18,19 +18,23 @@ from ..types import ErrorHandler, FilterProtocol, FormatterProtocol
 from ..utils import log_error_to_stderr
 from .base import AsyncHandler
 
+
 # Define a protocol for aiofiles file objects
 @runtime_checkable
 class AsyncFileProtocol(Protocol):
     """Protocol for aiofiles file objects."""
+
     async def write(self, s: str) -> None: ...
     async def flush(self) -> None: ...
     async def close(self) -> None: ...
     async def tell(self) -> int: ...
 
+
 # Try to import aiofiles
 try:
     import aiofiles
     import aiofiles.threadpool
+
     AIOFILES_AVAILABLE = True
 except ImportError:
     AIOFILES_AVAILABLE = False
@@ -152,13 +156,14 @@ class AsyncFileHandler(AsyncHandler):
                 errors=self.errors,
             )  # type: ignore
             # Type: ignore for aiofiles.open type issues
-            # The actual type is correct at runtime, mypy just has trouble with it
+            # The actual type is correct at runtime,
+            # mypy just has trouble with it
         except Exception as e:
             raise FileError(
                 f"Failed to open file: {e}",
                 filename=str(self.filename),
                 operation="open",
-                errno=getattr(e, 'errno', None),
+                errno=getattr(e, "errno", None),
             ) from e
 
     async def _ensure_file_open(self) -> None:
@@ -209,10 +214,13 @@ class AsyncFileHandler(AsyncHandler):
             ) from e
 
     def _prepare_message(self, formatted_message: str) -> str:
-        """Prepare the message for writing by ensuring it ends with a newline."""
+        """
+        Prepare the message for writing
+        by ensuring it ends with a newline.
+        """
         msg = formatted_message
-        if not msg.endswith('\n'):
-            msg += '\n'
+        if not msg.endswith("\n"):
+            msg += "\n"
         return msg
 
     async def _close_resources(self) -> None:
@@ -228,17 +236,22 @@ class AsyncFileHandler(AsyncHandler):
 
     def __repr__(self) -> str:
         """Return a string representation of the handler."""
+        formatter: Union[str, None] = None
+        if self.formatter:
+            formatter = type(self.formatter).__name__
         return (
             f"{self.__class__.__name__}(filename='{self.filename}', "
             f"mode='{self.mode}', level={self.level}, "
-            f"formatter={type(self.formatter).__name__ if self.formatter else None})"
+            f"formatter={formatter})"
         )
 
     async def __aenter__(self) -> AsyncFileHandler:
         """Async context manager entry."""
         return self
 
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+    async def __aexit__(
+        self, exc_type: Any, exc_val: Any, exc_tb: Any
+    ) -> None:
         """Async context manager exit."""
         await self.close()
 
@@ -280,7 +293,15 @@ class AsyncFileHandlerWithRotation(AsyncFileHandler):
             backup_count: Number of backup files to keep
         """
         super().__init__(
-            filename, mode, encoding, errors, delay, level, formatter, filters, error_handler
+            filename,
+            mode,
+            encoding,
+            errors,
+            delay,
+            level,
+            formatter,
+            filters,
+            error_handler,
         )
         self.backup_count = backup_count
         self._rotation_lock = asyncio.Lock()
@@ -307,7 +328,9 @@ class AsyncFileHandlerWithRotation(AsyncFileHandler):
         if backup_number == 1:
             return self.filename.with_suffix(self.filename.suffix + ".1")
         else:
-            return self.filename.with_suffix(f"{self.filename.suffix}.{backup_number}")
+            return self.filename.with_suffix(
+                f"{self.filename.suffix}.{backup_number}"
+            )
 
     def _log_file_error(self, message: str, file_path: Path) -> None:
         """Log file operation errors to stderr."""
@@ -326,7 +349,9 @@ class AsyncFileHandlerWithRotation(AsyncFileHandler):
                     backup_file.unlink()
                 except OSError as e:
                     # Log the error but don't raise it
-                    self._log_file_error(f"Failed to remove old backup file: {e}", backup_file)
+                    self._log_file_error(
+                        f"Failed to remove old backup file: {e}", backup_file
+                    )
             else:
                 break
 
@@ -346,13 +371,19 @@ class AsyncFileHandlerWithRotation(AsyncFileHandler):
                     try:
                         current_backup.unlink()
                     except OSError as e:
-                        self._log_file_error(f"Failed to remove backup file: {e}", current_backup)
+                        self._log_file_error(
+                            f"Failed to remove backup file: {e}",
+                            current_backup,
+                        )
                 else:
                     # Move the backup to the next number
                     try:
                         current_backup.rename(next_backup)
                     except OSError as e:
-                        self._log_file_error(f"Failed to rotate backup file: {e}", current_backup)
+                        self._log_file_error(
+                            f"Failed to rotate backup file: {e}",
+                            current_backup,
+                        )
 
     async def _emit(self, record: LogRecord, formatted_message: str) -> None:
         """

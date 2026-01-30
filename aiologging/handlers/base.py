@@ -202,7 +202,9 @@ class AsyncHandler(AsyncHandlerABC):
                     break
             except Exception as e:
                 # Log filter error but continue processing
-                sys.stderr.write(f"Filter error in {type(filter_obj).__name__}: {e}\n")
+                sys.stderr.write(
+                    f"Filter error in {type(filter_obj).__name__}: {e}\n"
+                )
                 result = False
                 break
 
@@ -268,7 +270,8 @@ class AsyncHandler(AsyncHandlerABC):
         """
         Emit a log record with enhanced error handling.
 
-        This method formats the record and calls the actual emit implementation.
+        This method formats the record and
+        calls the actual emit implementation.
 
         Args:
             record: The log record to emit
@@ -281,7 +284,9 @@ class AsyncHandler(AsyncHandlerABC):
             self._metrics.increment_errors()
             await self._handle_error(record, e)
 
-    async def _emit_with_retry(self, record: LogRecord, formatted_message: str) -> None:
+    async def _emit_with_retry(
+        self, record: LogRecord, formatted_message: str
+    ) -> None:
         """
         Emit a record with retry logic.
 
@@ -318,11 +323,9 @@ class AsyncHandler(AsyncHandlerABC):
         Returns:
             True if we should retry, False otherwise
         """
-        return (
-            attempt < self._retry_attempts and (
-                self._retry_strategy is None or
-                self._retry_strategy(attempt + 1, exception)
-            )
+        return attempt < self._retry_attempts and (
+            self._retry_strategy is None
+            or self._retry_strategy(attempt + 1, exception)
         )
 
     async def _wait_before_retry(self, attempt: int) -> None:
@@ -332,7 +335,7 @@ class AsyncHandler(AsyncHandlerABC):
         Args:
             attempt: The current attempt number (0-based)
         """
-        await asyncio.sleep(self._retry_delay * (2 ** attempt))
+        await asyncio.sleep(self._retry_delay * (2**attempt))
 
     async def _handle_error(self, record: LogRecord, error: Exception) -> None:
         """
@@ -393,17 +396,22 @@ class AsyncHandler(AsyncHandlerABC):
             Dictionary containing performance metrics.
         """
         metrics = self._metrics.get_metrics()
-        metrics.update({
-            "filter_cache_size": len(self._filter_cache),
-            "closed": self._closed,
-        })
+        metrics.update(
+            {
+                "filter_cache_size": len(self._filter_cache),
+                "closed": self._closed,
+            }
+        )
         return metrics
 
     def __repr__(self) -> str:
         """Return a string representation of the handler."""
+        formatter: Union[str, None] = None
+        if self.formatter:
+            formatter = type(self.formatter).__name__
         return (
             f"{self.__class__.__name__}(level={self.level}, "
-            f"formatter={type(self.formatter).__name__ if self.formatter else None}, "
+            f"formatter={formatter}, "
             f"filters={len(self.filters)}, "
             f"metrics={self.get_metrics()})"
         )
@@ -464,8 +472,15 @@ class BufferedAsyncHandler(AsyncHandler):
             priority_flush: Enable priority-based flushing
         """
         super().__init__(
-            level, formatter, filters, error_handler, rate_limiter,
-            retry_strategy, retry_attempts, retry_delay, enable_metrics
+            level,
+            formatter,
+            filters,
+            error_handler,
+            rate_limiter,
+            retry_strategy,
+            retry_attempts,
+            retry_delay,
+            enable_metrics,
         )
 
         self.buffer_size = buffer_size or self._default_buffer_size
@@ -521,9 +536,11 @@ class BufferedAsyncHandler(AsyncHandler):
 
         async with self._buffer_lock:
             # Use priority buffer for high-priority records if enabled
-            if (self.priority_flush and
-                record.levelno >= 40 and  # ERROR and CRITICAL
-                len(self._priority_buffer) < self.buffer_size // 4):
+            if (
+                self.priority_flush
+                and record.levelno >= 40  # ERROR and CRITICAL
+                and len(self._priority_buffer) < self.buffer_size // 4
+            ):
                 self._priority_buffer.append(record)
             else:
                 self._buffer.append(record)
@@ -537,23 +554,36 @@ class BufferedAsyncHandler(AsyncHandler):
                 await self._adjust_buffer_size()
 
             # Flush if buffer is full
-            current_buffer_size = len(self._buffer) + len(self._priority_buffer)
-            effective_buffer_size = self._adaptive_buffer_size if self.adaptive_buffering else self.buffer_size
+            current_buffer_size = len(self._buffer) + len(
+                self._priority_buffer
+            )
+            effective_buffer_size = (
+                self._adaptive_buffer_size
+                if self.adaptive_buffering
+                else self.buffer_size
+            )
 
             if current_buffer_size >= effective_buffer_size:
                 await self._flush_buffer()
 
     async def _auto_flush(self) -> None:
-        """Enhanced auto-flush task that runs periodically with adaptive timing."""
+        """
+        Enhanced auto-flush task that
+        runs periodically with adaptive timing.
+        """
         while not self._closed and self.auto_flush:
             # Adaptive flush interval based on processing time
             flush_interval = self.flush_interval
             if self.adaptive_buffering and self._last_flush_duration > 0:
                 # Adjust interval based on last flush duration
                 if self._last_flush_duration > flush_interval * 0.5:
-                    flush_interval *= 1.2  # Increase interval if processing is slow
+                    flush_interval *= (
+                        1.2  # Increase interval if processing is slow
+                    )
                 elif self._last_flush_duration < flush_interval * 0.1:
-                    flush_interval *= 0.8  # Decrease interval if processing is fast
+                    flush_interval *= (
+                        0.8  # Decrease interval if processing is fast
+                    )
 
             await asyncio.sleep(flush_interval)
 
@@ -562,7 +592,10 @@ class BufferedAsyncHandler(AsyncHandler):
                 await self._flush_buffer()
 
     async def _flush_buffer(self) -> None:
-        """Enhanced buffer flushing with priority handling and batch optimization."""
+        """
+        Enhanced buffer flushing
+        with priority handling and batch optimization.
+        """
         start_time = time.time()
 
         # Get records to flush
@@ -636,9 +669,9 @@ class BufferedAsyncHandler(AsyncHandler):
         self._last_flush_duration = time.time() - start_time
         if self._batches_processed > 0:
             self._avg_processing_time = (
-                (self._avg_processing_time * (self._batches_processed - 1) +
-                 self._last_flush_duration) / self._batches_processed
-            )
+                self._avg_processing_time * (self._batches_processed - 1)
+                + self._last_flush_duration
+            ) / self._batches_processed
 
     async def _flush_with_retry(self, records: List[LogRecord]) -> None:
         """
@@ -658,17 +691,21 @@ class BufferedAsyncHandler(AsyncHandler):
 
                 # Check if we should retry
                 if attempt < self._retry_attempts and (
-                    self._retry_strategy is None or
-                    self._retry_strategy(attempt + 1, e)
+                    self._retry_strategy is None
+                    or self._retry_strategy(attempt + 1, e)
                 ):
-                    await asyncio.sleep(self._retry_delay * (2 ** attempt))  # Exponential backoff
+                    await asyncio.sleep(
+                        self._retry_delay * (2**attempt)
+                    )  # Exponential backoff
                 else:
                     break
 
         # All retries failed
         raise last_exception  # type: ignore[misc]
 
-    async def _handle_batch_error(self, records: List[LogRecord], error: Exception) -> None:
+    async def _handle_batch_error(
+        self, records: List[LogRecord], error: Exception
+    ) -> None:
         """
         Handle errors during batch processing.
 
@@ -684,6 +721,7 @@ class BufferedAsyncHandler(AsyncHandler):
                     pass  # Avoid infinite error loops
         else:
             import traceback
+
             sys.stderr.write(
                 f"Error flushing buffer in {type(self).__name__}: {error}\n"
                 f"Records affected: {len(records)}\n"
@@ -700,16 +738,18 @@ class BufferedAsyncHandler(AsyncHandler):
         # Adjust buffer size based on processing performance
         if self._avg_processing_time > 0:
             # If processing is slow, reduce buffer size
-            if self._avg_processing_time > 2.0:  # More than 2 seconds per batch
+            if (
+                self._avg_processing_time > 2.0
+            ):  # More than 2 seconds per batch
                 self._adaptive_buffer_size = max(
-                    self.buffer_size // 2,
-                    10  # Minimum buffer size
+                    self.buffer_size // 2, 10  # Minimum buffer size
                 )
             # If processing is fast, increase buffer size
-            elif self._avg_processing_time < 0.5:  # Less than 0.5 seconds per batch
+            elif (
+                self._avg_processing_time < 0.5
+            ):  # Less than 0.5 seconds per batch
                 self._adaptive_buffer_size = min(
-                    self.buffer_size * 2,
-                    self.max_batch_size
+                    self.buffer_size * 2, self.max_batch_size
                 )
             else:
                 # Reset to default
@@ -767,7 +807,9 @@ class BufferedAsyncHandler(AsyncHandler):
             "buffer_size": len(self._buffer),
             "priority_buffer_size": len(self._priority_buffer),
             "max_buffer_size": self.buffer_size,
-            "adaptive_buffer_size": self._adaptive_buffer_size if self.adaptive_buffering else None,
+            "adaptive_buffer_size": (
+                self._adaptive_buffer_size if self.adaptive_buffering else None
+            ),
             "batches_processed": self._batches_processed,
             "total_records_in_batches": self._total_records_in_batches,
             "priority_flushes": self._priority_flushes,

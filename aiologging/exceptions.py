@@ -4,8 +4,9 @@ Custom exceptions for the aiologging library.
 This module defines all custom exceptions used throughout the aiologging
 library to provide clear error handling and debugging information.
 
-The exception hierarchy is designed to provide specific error types for different
-components of the library, making it easier to handle errors appropriately.
+The exception hierarchy is designed to provide specific error types
+for different components of the library, making it easier
+to handle errors appropriately.
 All exceptions inherit from the base AiologgingError class, which provides
 consistent error formatting and context information.
 
@@ -72,14 +73,20 @@ class AiologgingError(Exception):
     _detail_separator: ClassVar[str] = " | "
     _detail_format: ClassVar[str] = "{key}={value}"
 
-    def __init__(self, message: str, details: Optional[dict[str, ConfigValue]] = None, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        message: str,
+        details: Optional[dict[str, ConfigValue]] = None,
+        **kwargs: Any,
+    ) -> None:
         """
         Initialize the exception with a message and optional details.
 
         Args:
             message: The error message
             details: Optional dictionary of additional context information
-            **kwargs: Additional context information that will be merged with details
+            **kwargs: Additional context information
+                      that will be merged with details
         """
         super().__init__(message)
         self.message = message
@@ -103,11 +110,14 @@ class AiologgingError(Exception):
         if not self.details:
             return ""
         # Filter out None values to avoid cluttering the output
-        filtered_details = {k: v for k, v in self.details.items() if v is not None}
+        filtered_details = {
+            k: v for k, v in self.details.items() if v is not None
+        }
         if not filtered_details:
             return ""
         return self._detail_separator.join(
-            self._detail_format.format(key=k, value=v) for k, v in filtered_details.items()
+            self._detail_format.format(key=k, value=v)
+            for k, v in filtered_details.items()
         )
 
     def __str__(self) -> str:
@@ -141,7 +151,10 @@ class AiologgingError(Exception):
         Returns:
             Detailed representation including class name and details
         """
-        return f"{self.__class__.__name__}('{self.message}', details={self.details})"
+        return (
+            f"{self.__class__.__name__}('{self.message}', "
+            f"details={self.details})"
+        )
 
 
 class HandlerError(AiologgingError):
@@ -165,7 +178,9 @@ class HandlerError(AiologgingError):
         ... )
     """
 
-    _error_template: ClassVar[str] = "{message} | Handler: {handler_name} | Operation: {operation}"
+    _error_template: ClassVar[str] = (
+        "{message} | Handler: {handler_name} | Operation: {operation}"
+    )
 
     def __init__(
         self,
@@ -181,7 +196,8 @@ class HandlerError(AiologgingError):
         Args:
             message: The error message
             handler_name: Name of the handler that raised the error
-            operation: Operation that was being performed when the error occurred
+            operation: Operation that was being performed
+                       when the error occurred
             details: Optional dictionary of additional context information
             **kwargs: Additional context information
         """
@@ -190,7 +206,7 @@ class HandlerError(AiologgingError):
             details,
             handler_name=handler_name,
             operation=operation,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -215,7 +231,9 @@ class ConfigurationError(AiologgingError):
         ... )
     """
 
-    _error_template: ClassVar[str] = "{message} | Config key: {config_key} | Config value: {config_value}"
+    _error_template: ClassVar[str] = (
+        "{message} | Config key: {config_key} | Config value: {config_value}"
+    )
 
     def __init__(
         self,
@@ -240,7 +258,7 @@ class ConfigurationError(AiologgingError):
             details,
             config_key=config_key,
             config_value=config_value,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -265,7 +283,10 @@ class DependencyError(AiologgingError):
         ... )
     """
 
-    _error_template: ClassVar[str] = "{message} | Missing dependency: {dependency_name} | Install with: {install_command}"
+    _error_template: ClassVar[str] = (
+        "{message} | Missing dependency: {dependency_name} | "
+        "Install with: {install_command}"
+    )
 
     def __init__(
         self,
@@ -290,7 +311,7 @@ class DependencyError(AiologgingError):
             details,
             dependency_name=dependency_name,
             install_command=install_command,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -315,7 +336,9 @@ class AuthenticationError(AiologgingError):
         ... )
     """
 
-    _error_template: ClassVar[str] = "{message} | Auth type: {auth_type} | Status code: {status_code}"
+    _error_template: ClassVar[str] = (
+        "{message} | Auth type: {auth_type} | Status code: {status_code}"
+    )
 
     def __init__(
         self,
@@ -340,7 +363,7 @@ class AuthenticationError(AiologgingError):
             details,
             auth_type=auth_type,
             status_code=status_code,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -366,7 +389,10 @@ class NetworkError(AiologgingError):
         ... )
     """
 
-    _error_template: ClassVar[str] = "{message} | URL: {url} | Status code: {status_code} | Timeout: {timeout}s"
+    _error_template: ClassVar[str] = (
+        "{message} | URL: {url} | Status code: {status_code} | "
+        "Timeout: {timeout}s"
+    )
 
     def __init__(
         self,
@@ -394,7 +420,7 @@ class NetworkError(AiologgingError):
             url=url,
             status_code=status_code,
             timeout=timeout,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -421,7 +447,10 @@ class FileError(AiologgingError):
         ... )
     """
 
-    _error_template: ClassVar[str] = "{message} | File: {filename} | Operation: {operation} | Error number: {errno}"
+    _error_template: ClassVar[str] = (
+        "{message} | File: {filename} | Operation: {operation} | "
+        "Error number: {errno}"
+    )
 
     def __init__(
         self,
@@ -438,7 +467,8 @@ class FileError(AiologgingError):
         Args:
             message: The error message
             filename: Name of the file that caused the error
-            operation: Operation that was being performed when the error occurred
+            operation: Operation that was being performed
+                       when the error occurred
             errno: System error number if applicable
             details: Optional dictionary of additional context information
             **kwargs: Additional context information
@@ -449,7 +479,7 @@ class FileError(AiologgingError):
             filename=filename,
             operation=operation,
             errno=errno,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -474,7 +504,9 @@ class RotationError(FileError):
         ... )
     """
 
-    _error_template: ClassVar[str] = "{message} | File: {filename} | Rotation type: {rotation_type}"
+    _error_template: ClassVar[str] = (
+        "{message} | File: {filename} | Rotation type: {rotation_type}"
+    )
 
     def __init__(
         self,
@@ -494,15 +526,14 @@ class RotationError(FileError):
             details: Optional dictionary of additional context information
             **kwargs: Additional context information
         """
-        # Don't pass operation to parent to avoid it appearing in basic error messages
         super().__init__(
             message,
             details=details,
             filename=filename,
-            operation=None,  # Set to None to avoid appearing in basic error messages
+            operation=None,
             errno=None,
             rotation_type=rotation_type,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -527,7 +558,9 @@ class BatchError(AiologgingError):
         ... )
     """
 
-    _error_template: ClassVar[str] = "{message} | Batch size: {batch_size} | Processed: {processed_count}"
+    _error_template: ClassVar[str] = (
+        "{message} | Batch size: {batch_size} | Processed: {processed_count}"
+    )
 
     def __init__(
         self,
@@ -552,7 +585,7 @@ class BatchError(AiologgingError):
             details,
             batch_size=batch_size,
             processed_count=processed_count,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -578,7 +611,9 @@ class FormatterError(AiologgingError):
         ... )
     """
 
-    _error_template: ClassVar[str] = "{message} | Formatter: {formatter_name} | Record: {record_summary}"
+    _error_template: ClassVar[str] = (
+        "{message} | Formatter: {formatter_name} | Record: {record_summary}"
+    )
 
     def __init__(
         self,
@@ -598,10 +633,11 @@ class FormatterError(AiologgingError):
             details: Optional dictionary of additional context information
             **kwargs: Additional context information
         """
-        # Create a summary of record details to avoid overly long error messages
         record_summary = None
         if record_details:
-            record_summary = ", ".join(f"{k}={v}" for k, v in list(record_details.items())[:3])
+            record_summary = ", ".join(
+                f"{k}={v}" for k, v in list(record_details.items())[:3]
+            )
             if len(record_details) > 3:
                 record_summary += "..."
 
@@ -610,7 +646,7 @@ class FormatterError(AiologgingError):
             details,
             formatter_name=formatter_name,
             record_summary=record_summary,
-            **kwargs
+            **kwargs,
         )
         self.record_details = record_details or {}
 
@@ -636,7 +672,9 @@ class LoggerError(AiologgingError):
         ... )
     """
 
-    _error_template: ClassVar[str] = "{message} | Logger: {logger_name} | Operation: {operation}"
+    _error_template: ClassVar[str] = (
+        "{message} | Logger: {logger_name} | Operation: {operation}"
+    )
 
     def __init__(
         self,
@@ -652,7 +690,8 @@ class LoggerError(AiologgingError):
         Args:
             message: The error message
             logger_name: Name of the logger that raised the error
-            operation: Operation that was being performed when the error occurred
+            operation: Operation that was being performed
+                       when the error occurred
             details: Optional dictionary of additional context information
             **kwargs: Additional context information
         """
@@ -661,7 +700,7 @@ class LoggerError(AiologgingError):
             details,
             logger_name=logger_name,
             operation=operation,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -686,7 +725,9 @@ class ContextError(AiologgingError):
         ... )
     """
 
-    _error_template: ClassVar[str] = "{message} | Context type: {context_type} | Operation: {operation}"
+    _error_template: ClassVar[str] = (
+        "{message} | Context type: {context_type} | Operation: {operation}"
+    )
 
     def __init__(
         self,
@@ -702,7 +743,8 @@ class ContextError(AiologgingError):
         Args:
             message: The error message
             context_type: Type of context that failed
-            operation: Operation that was being performed when the error occurred
+            operation: Operation that was being performed
+                       when the error occurred
             details: Optional dictionary of additional context information
             **kwargs: Additional context information
         """
@@ -711,7 +753,7 @@ class ContextError(AiologgingError):
             details,
             context_type=context_type,
             operation=operation,
-            **kwargs
+            **kwargs,
         )
 
 
@@ -821,7 +863,9 @@ class BufferFullError(HandlerError):
         ... )
     """
 
-    _error_template: ClassVar[str] = "{message} | Handler: {handler_name} | Buffer size: {buffer_size}"
+    _error_template: ClassVar[str] = (
+        "{message} | Handler: {handler_name} | Buffer size: {buffer_size}"
+    )
 
     def __init__(
         self,
@@ -849,5 +893,5 @@ class BufferFullError(HandlerError):
             operation,
             details,
             buffer_size=buffer_size,
-            **kwargs
+            **kwargs,
         )

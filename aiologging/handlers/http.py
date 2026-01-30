@@ -22,6 +22,7 @@ from ..types import (
     FormatterProtocol,
     HeadersType,
     HttpContentType,
+    ParamsType,
 )
 from .base import BufferedAsyncHandler
 
@@ -29,6 +30,7 @@ from .base import BufferedAsyncHandler
 try:
     import aiohttp
     from aiohttp import ClientSession, ClientTimeout
+
     AIOHTTP_AVAILABLE = True
 except ImportError:
     AIOHTTP_AVAILABLE = False
@@ -37,6 +39,7 @@ except ImportError:
 # Try to import protobuf
 try:
     from google.protobuf import message
+
     PROTOBUF_AVAILABLE = True
 except ImportError:
     PROTOBUF_AVAILABLE = False
@@ -78,7 +81,7 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
         url: str,
         method: str = "POST",
         headers: Optional[HeadersType] = None,
-        params: Optional[Dict[str, Union[str, List[str]]]] = None,
+        params: Optional[ParamsType] = None,
         timeout: float = 30.0,
         verify_ssl: bool = True,
         authenticator: Optional[AuthenticatorProtocol[Any, Any]] = None,
@@ -116,7 +119,9 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
             filters=filters,
             error_handler=error_handler,
             buffer_size=batch_config.batch_size if batch_config else 100,
-            flush_interval=batch_config.flush_interval if batch_config else 5.0,
+            flush_interval=(
+                batch_config.flush_interval if batch_config else 5.0
+            ),
             auto_flush=True,
         )
 
@@ -189,7 +194,11 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
         except Exception as e:
             raise AuthenticationError(
                 f"Authentication failed: {e}",
-                auth_type=type(self.authenticator).__name__ if self.authenticator else "default",
+                auth_type=(
+                    type(self.authenticator).__name__
+                    if self.authenticator
+                    else "default"
+                ),
             ) from e
 
     @abstractmethod
@@ -243,7 +252,9 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
             request_data = await self._prepare_request_data(records)
 
             # Get authentication headers
-            auth_headers = await self._authenticate_request(session, request_data)
+            auth_headers = await self._authenticate_request(
+                session, request_data
+            )
 
             # Merge headers
             headers = dict(self.headers)
@@ -268,7 +279,7 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
     async def _make_request_with_retries(
         self,
         session: ClientSession,
-        headers: Dict[str, str],
+        headers: HeadersType,
         request_data: Any,
         records: List[LogRecord],
     ) -> None:
@@ -288,14 +299,19 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
 
         for attempt in range(self.batch_config.max_retries + 1):
             try:
-                response = await self._make_single_request(session, headers, request_data)
+                response = await self._make_single_request(
+                    session, headers, request_data
+                )
                 if response.status < 400:
                     return  # Success
 
                 # Handle HTTP error
                 error_text = await response.text()
                 last_exception = NetworkError(
-                    f"HTTP request failed with status {response.status}: {error_text}",
+                    (
+                        "HTTP request failed with status "
+                        f"{response.status}: {error_text}"
+                    ),
                     url=self.url,
                     status_code=response.status,
                     details={"attempt": attempt + 1},
@@ -314,7 +330,9 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
 
             # Wait before retry (except on the last attempt)
             if attempt < self.batch_config.max_retries:
-                await asyncio.sleep(self.batch_config.retry_delay * (2 ** attempt))
+                await asyncio.sleep(
+                    self.batch_config.retry_delay * (2**attempt)
+                )
 
         # All retries failed
         raise last_exception or NetworkError(
@@ -326,7 +344,7 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
     async def _make_single_request(
         self,
         session: ClientSession,
-        headers: Dict[str, str],
+        headers: HeadersType,
         request_data: Any,
     ) -> Any:
         """
@@ -344,8 +362,16 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
             method=self.method,
             url=self.url,
             headers=headers,
-            json=request_data if isinstance(request_data, (dict, list)) else None,
-            data=request_data if not isinstance(request_data, (dict, list)) else None,
+            json=(
+                request_data
+                if isinstance(request_data, (dict, list))
+                else None
+            ),
+            data=(
+                request_data
+                if not isinstance(request_data, (dict, list))
+                else None
+            ),
             params=self.params,
         )
 
@@ -356,10 +382,13 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
 
     def __repr__(self) -> str:
         """Return a string representation of the handler."""
+        formatter: Union[str, None] = None
+        if self.formatter:
+            formatter = type(self.formatter).__name__
         return (
             f"{self.__class__.__name__}(url='{self.url}', "
             f"method='{self.method}', level={self.level}, "
-            f"formatter={type(self.formatter).__name__ if self.formatter else None})"
+            f"formatter={formatter})"
         )
 
 
@@ -379,7 +408,8 @@ class AsyncHttpTextHandler(AsyncHttpHandlerBase):
 
     async def _emit(self, record: LogRecord, formatted_message: str) -> None:
         """Emit a log record (buffered handler uses flush instead)."""
-        # This is a buffered handler, so individual records are not emitted directly
+        # This is a buffered handler, so individual records
+        # are not emitted directly
         # They are collected and sent in batches via flush()
         pass
 
@@ -412,7 +442,8 @@ class AsyncHttpJsonHandler(AsyncHttpHandlerBase):
 
     async def _emit(self, record: LogRecord, formatted_message: str) -> None:
         """Emit a log record (buffered handler uses flush instead)."""
-        # This is a buffered handler, so individual records are not emitted directly
+        # This is a buffered handler, so individual records
+        # are not emitted directly
         # They are collected and sent in batches via flush()
         pass
 
@@ -440,8 +471,10 @@ class AsyncHttpJsonHandler(AsyncHttpHandlerBase):
 
         # Add exception info if present
         if record.exc_info:
-            if self.formatter and hasattr(self.formatter, 'formatException'):
-                json_record["exc_info"] = self.formatter.formatException(record.exc_info)
+            if self.formatter and hasattr(self.formatter, "formatException"):
+                json_record["exc_info"] = self.formatter.formatException(
+                    record.exc_info
+                )
             else:
                 json_record["exc_info"] = str(record.exc_info)
 
@@ -451,7 +484,9 @@ class AsyncHttpJsonHandler(AsyncHttpHandlerBase):
 
         return json_record
 
-    async def _prepare_request_data(self, records: List[LogRecord]) -> List[Dict[str, Any]]:
+    async def _prepare_request_data(
+        self, records: List[LogRecord]
+    ) -> List[Dict[str, Any]]:
         """Prepare request data as JSON."""
         return [self._convert_record_to_dict(record) for record in records]
 
@@ -473,7 +508,7 @@ class AsyncHttpProtoHandler(AsyncHttpHandlerBase):
         proto_message_class: Optional[type] = None,
         method: str = "POST",
         headers: Optional[HeadersType] = None,
-        params: Optional[Dict[str, Union[str, List[str]]]] = None,
+        params: Optional[ParamsType] = None,
         timeout: float = 30.0,
         verify_ssl: bool = True,
         authenticator: Optional[AuthenticatorProtocol[Any, Any]] = None,
@@ -507,8 +542,18 @@ class AsyncHttpProtoHandler(AsyncHttpHandlerBase):
         _check_protobuf()
 
         super().__init__(
-            url, method, headers, params, timeout, verify_ssl,
-            authenticator, level, formatter, filters, error_handler, batch_config
+            url,
+            method,
+            headers,
+            params,
+            timeout,
+            verify_ssl,
+            authenticator,
+            level,
+            formatter,
+            filters,
+            error_handler,
+            batch_config,
         )
 
         self.proto_message_class = proto_message_class
@@ -524,7 +569,8 @@ class AsyncHttpProtoHandler(AsyncHttpHandlerBase):
 
     async def _emit(self, record: LogRecord, formatted_message: str) -> None:
         """Emit a log record (buffered handler uses flush instead)."""
-        # This is a buffered handler, so individual records are not emitted directly
+        # This is a buffered handler, so individual records
+        # are not emitted directly
         # They are collected and sent in batches via flush()
         pass
 
@@ -553,11 +599,14 @@ class AsyncHttpProtoHandler(AsyncHttpHandlerBase):
             json_data.append(json_record)
 
         # Convert to JSON and then to bytes (as a simple protobuf alternative)
-        return json.dumps(json_data).encode('utf-8')
+        return json.dumps(json_data).encode("utf-8")
 
-    async def _create_custom_proto_message(self, records: List[LogRecord]) -> bytes:
+    async def _create_custom_proto_message(
+        self, records: List[LogRecord]
+    ) -> bytes:
         """Create a custom protobuf message from log records."""
-        # This would be implemented based on the specific protobuf message class
+        # This would be implemented based
+        # on the specific protobuf message class
         # For now, fall back to the simple implementation
         return self._create_simple_proto_message(records)
 
@@ -582,7 +631,7 @@ class AsyncHttpHandler(AsyncHttpHandlerBase):
         format_type: Optional[HttpContentType] = None,
         method: str = "POST",
         headers: Optional[HeadersType] = None,
-        params: Optional[Dict[str, Union[str, List[str]]]] = None,
+        params: Optional[ParamsType] = None,
         timeout: float = 30.0,
         verify_ssl: bool = True,
         authenticator: Optional[AuthenticatorProtocol[Any, Any]] = None,
@@ -611,8 +660,18 @@ class AsyncHttpHandler(AsyncHttpHandlerBase):
             batch_config: Configuration for batch processing
         """
         super().__init__(
-            url, method, headers, params, timeout, verify_ssl,
-            authenticator, level, formatter, filters, error_handler, batch_config
+            url,
+            method,
+            headers,
+            params,
+            timeout,
+            verify_ssl,
+            authenticator,
+            level,
+            formatter,
+            filters,
+            error_handler,
+            batch_config,
         )
 
         self.format_type = format_type
@@ -620,19 +679,50 @@ class AsyncHttpHandler(AsyncHttpHandlerBase):
 
         # Create handlers for different formats
         self._handlers["text/plain"] = AsyncHttpTextHandler(
-            url, method, headers, params, timeout, verify_ssl,
-            authenticator, level, formatter, filters, error_handler, batch_config
+            url,
+            method,
+            headers,
+            params,
+            timeout,
+            verify_ssl,
+            authenticator,
+            level,
+            formatter,
+            filters,
+            error_handler,
+            batch_config,
         )
         self._handlers["application/json"] = AsyncHttpJsonHandler(
-            url, method, headers, params, timeout, verify_ssl,
-            authenticator, level, formatter, filters, error_handler, batch_config
+            url,
+            method,
+            headers,
+            params,
+            timeout,
+            verify_ssl,
+            authenticator,
+            level,
+            formatter,
+            filters,
+            error_handler,
+            batch_config,
         )
 
         # Only create proto handler if protobuf is available
         if PROTOBUF_AVAILABLE:
             self._handlers["application/x-protobuf"] = AsyncHttpProtoHandler(
-                url, None, method, headers, params, timeout, verify_ssl,
-                authenticator, level, formatter, filters, error_handler, batch_config
+                url,
+                None,
+                method,
+                headers,
+                params,
+                timeout,
+                verify_ssl,
+                authenticator,
+                level,
+                formatter,
+                filters,
+                error_handler,
+                batch_config,
             )
 
     async def emit(self, record: LogRecord) -> None:
@@ -646,7 +736,8 @@ class AsyncHttpHandler(AsyncHttpHandlerBase):
 
     async def _emit(self, record: LogRecord, formatted_message: str) -> None:
         """Emit a log record (buffered handler uses flush instead)."""
-        # This is a buffered handler, so individual records are not emitted directly
+        # This is a buffered handler, so individual records
+        # are not emitted directly
         # They are collected and sent in batches via flush()
         pass
 

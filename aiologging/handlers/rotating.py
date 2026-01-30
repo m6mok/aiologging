@@ -14,7 +14,12 @@ from pathlib import Path
 from typing import Optional, Union
 
 from ..exceptions import RotationError
-from ..types import ErrorHandler, FilterProtocol, FormatterProtocol, TimeInterval
+from ..types import (
+    ErrorHandler,
+    FilterProtocol,
+    FormatterProtocol,
+    TimeInterval,
+)
 from .file import AsyncFileHandlerWithRotation, _check_aiofiles
 
 
@@ -46,7 +51,8 @@ class AsyncRotatingFileHandler(AsyncFileHandlerWithRotation):
         Args:
             filename: The path to the log file
             mode: The file opening mode (defaults to 'a' for append)
-            max_bytes: Maximum file size in bytes before rotation (0 = no rotation)
+            max_bytes: Maximum file size in bytes
+                       before rotation (0 = no rotation)
             backup_count: Number of backup files to keep
             encoding: The file encoding (defaults to 'utf-8')
             errors: The error handling strategy for encoding
@@ -79,7 +85,16 @@ class AsyncRotatingFileHandler(AsyncFileHandlerWithRotation):
             )
 
         super().__init__(
-            filename, mode, encoding, errors, delay, level, formatter, filters, error_handler, backup_count
+            filename,
+            mode,
+            encoding,
+            errors,
+            delay,
+            level,
+            formatter,
+            filters,
+            error_handler,
+            backup_count,
         )
         self.max_bytes = max_bytes
 
@@ -156,11 +171,14 @@ class AsyncRotatingFileHandler(AsyncFileHandlerWithRotation):
 
     def __repr__(self) -> str:
         """Return a string representation of the handler."""
+        formatter: Union[str, None] = None
+        if self.formatter:
+            formatter = type(self.formatter).__name__
         return (
             f"{self.__class__.__name__}(filename='{self.filename}', "
             f"max_bytes={self.max_bytes}, backup_count={self.backup_count}, "
             f"level={self.level}, "
-            f"formatter={type(self.formatter).__name__ if self.formatter else None})"
+            f"formatter={formatter})"
         )
 
 
@@ -168,16 +186,16 @@ class AsyncTimedRotatingFileHandler(AsyncFileHandlerWithRotation):
     """
     Async handler that rotates log files at specific time intervals.
 
-    This handler is similar to the standard logging.TimedRotatingFileHandler but
-    provides async functionality for non-blocking file I/O operations.
+    This handler is similar to the standard logging.TimedRotatingFileHandler
+    but provides async functionality for non-blocking file I/O operations.
     """
 
     # Time interval mappings
     TIME_INTERVALS = {
-        "S": 1,        # seconds
-        "M": 60,       # minutes
-        "H": 3600,     # hours
-        "D": 86400,    # days
+        "S": 1,  # seconds
+        "M": 60,  # minutes
+        "H": 3600,  # hours
+        "D": 86400,  # days
         "midnight": 86400,  # days at midnight
         "W0": 604800,  # Monday (7 days)
         "W1": 604800,  # Tuesday
@@ -209,7 +227,8 @@ class AsyncTimedRotatingFileHandler(AsyncFileHandlerWithRotation):
 
         Args:
             filename: The path to the log file
-            when: The type of interval ('S', 'M', 'H', 'D', 'midnight', 'W0'-'W6')
+            when: The type of interval
+                  ('S', 'M', 'H', 'D', 'midnight', 'W0'-'W6')
             interval: The interval between rotations
             backup_count: Number of backup files to keep
             encoding: The file encoding (defaults to 'utf-8')
@@ -230,7 +249,10 @@ class AsyncTimedRotatingFileHandler(AsyncFileHandlerWithRotation):
 
         if when not in self.TIME_INTERVALS:
             raise RotationError(
-                f"Invalid 'when' value: {when}. Must be one of {list(self.TIME_INTERVALS.keys())}",
+                (
+                    f"Invalid 'when' value: {when}. "
+                    f"Must be one of {list(self.TIME_INTERVALS.keys())}"
+                ),
                 filename=str(filename),
                 rotation_type="time",
                 details={"when": when},
@@ -253,7 +275,16 @@ class AsyncTimedRotatingFileHandler(AsyncFileHandlerWithRotation):
             )
 
         super().__init__(
-            filename, "a", encoding, errors, delay, level, formatter, filters, error_handler, backup_count
+            filename,
+            "a",
+            encoding,
+            errors,
+            delay,
+            level,
+            formatter,
+            filters,
+            error_handler,
+            backup_count,
         )
         self.when = when
         self.interval = interval
@@ -277,7 +308,9 @@ class AsyncTimedRotatingFileHandler(AsyncFileHandlerWithRotation):
             current_second = t[5]
 
             # Time until midnight
-            r = 86400 - (current_hour * 3600 + current_minute * 60 + current_second)
+            r = 86400 - (
+                current_hour * 3600 + current_minute * 60 + current_second
+            )
 
             if self.at_time is not None:
                 # Use specific time
@@ -287,7 +320,9 @@ class AsyncTimedRotatingFileHandler(AsyncFileHandlerWithRotation):
 
                 # Compute time until the specified time
                 target_seconds = at_hour * 3600 + at_minute * 60 + at_second
-                current_seconds = current_hour * 3600 + current_minute * 60 + current_second
+                current_seconds = (
+                    current_hour * 3600 + current_minute * 60 + current_second
+                )
 
                 if target_seconds > current_seconds:
                     r = target_seconds - current_seconds
@@ -324,7 +359,9 @@ class AsyncTimedRotatingFileHandler(AsyncFileHandlerWithRotation):
                 current_second = t[5]
 
                 target_seconds = at_hour * 3600 + at_minute * 60 + at_second
-                current_seconds = current_hour * 3600 + current_minute * 60 + current_second
+                current_seconds = (
+                    current_hour * 3600 + current_minute * 60 + current_second
+                )
 
                 if target_seconds > current_seconds:
                     r += target_seconds - current_seconds
@@ -336,7 +373,9 @@ class AsyncTimedRotatingFileHandler(AsyncFileHandlerWithRotation):
         else:
             # 'S', 'M', 'H', 'D' - simple intervals
             interval_seconds = self.TIME_INTERVALS[self.when] * self.interval
-            time_until_rotation: float = interval_seconds - (current_time % interval_seconds)
+            time_until_rotation: float = interval_seconds - (
+                current_time % interval_seconds
+            )
             return current_time + time_until_rotation
 
     async def _should_rotate(self, record: LogRecord) -> bool:
@@ -386,7 +425,9 @@ class AsyncTimedRotatingFileHandler(AsyncFileHandlerWithRotation):
             await self._rotate_backups_with_suffix(suffix)
 
             # Move current file to backup with suffix
-            backup_file = self.filename.with_suffix(f"{self.filename.suffix}.{suffix}")
+            backup_file = self.filename.with_suffix(
+                f"{self.filename.suffix}.{suffix}"
+            )
             if self.filename.exists():
                 try:
                     self.filename.rename(backup_file)
@@ -443,10 +484,17 @@ class AsyncTimedRotatingFileHandler(AsyncFileHandlerWithRotation):
                     backup_file.unlink()
                 except OSError as e:
                     import sys
-                    sys.stderr.write(f"Failed to remove old backup file {backup_file}: {e}\n")
+
+                    sys.stderr.write(
+                        "Failed to remove "
+                        f"old backup file {backup_file}: {e}\n"
+                    )
 
     async def _remove_old_backups_with_suffix(self) -> None:
-        """Remove old backup files with time suffixes if backup_count is exceeded."""
+        """
+        Remove old backup files
+        with time suffixes if backup_count is exceeded.
+        """
         if self.backup_count <= 0:
             return
 
@@ -466,13 +514,20 @@ class AsyncTimedRotatingFileHandler(AsyncFileHandlerWithRotation):
                     backup_file.unlink()
                 except OSError as e:
                     import sys
-                    sys.stderr.write(f"Failed to remove old backup file {backup_file}: {e}\n")
+
+                    sys.stderr.write(
+                        "Failed to remove "
+                        f"old backup file {backup_file}: {e}\n"
+                    )
 
     def __repr__(self) -> str:
         """Return a string representation of the handler."""
+        formatter: Union[str, None] = None
+        if self.formatter:
+            formatter = type(self.formatter).__name__
         return (
             f"{self.__class__.__name__}(filename='{self.filename}', "
             f"when='{self.when}', interval={self.interval}, "
             f"backup_count={self.backup_count}, level={self.level}, "
-            f"formatter={type(self.formatter).__name__ if self.formatter else None})"
+            f"formatter={formatter})"
         )

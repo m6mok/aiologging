@@ -61,18 +61,18 @@ LoggerType = TypeVar("LoggerType", bound="AsyncLogger")
 FormatterType = TypeVar("FormatterType", bound="FormatterProtocol")
 FilterType = TypeVar("FilterType", bound="FilterProtocol")
 
-# More specific type definitions instead of Any
-JsonValue = Union[str, int, float, bool, None, dict[str, "JsonValue"], list["JsonValue"]]
-ConfigValue = Union[str, int, float, bool, None, list["ConfigValue"], dict[str, "ConfigValue"]]
+
+JsonValue = Union[str, int, float, bool, None, Dict[str, "JsonValue"], List["JsonValue"]]
+ConfigValue = Union[str, int, float, bool, None, List["ConfigValue"], Dict[str, "ConfigValue"]]
 HeaderValues = Union[str, List[str]]
 ParamValues = Union[str, List[str]]
 
-# Literal types for log levels with numeric mapping
+
 LogLevel: TypeAlias = Literal[
     "CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"
 ]
 
-# Mapping of log level names to their numeric values
+
 LOG_LEVEL_MAP: Dict[LogLevel, int] = {
     "CRITICAL": 50,
     "ERROR": 40,
@@ -82,7 +82,7 @@ LOG_LEVEL_MAP: Dict[LogLevel, int] = {
     "NOTSET": 0,
 }
 
-# Protocol for authenticator functions with better type safety
+
 @runtime_checkable
 class AuthenticatorProtocol(Protocol[RequestType, ResponseType]):
     """
@@ -109,7 +109,7 @@ class AuthenticatorProtocol(Protocol[RequestType, ResponseType]):
         """Authenticate the request using the session and request data."""
         ...
 
-# Protocol for formatters with more comprehensive interface
+
 @runtime_checkable
 class FormatterProtocol(Protocol):
     """
@@ -147,7 +147,7 @@ class FormatterProtocol(Protocol):
         """Format the time from a log record."""
         ...
 
-# Protocol for filters with additional methods
+
 @runtime_checkable
 class FilterProtocol(Protocol):
     """
@@ -177,21 +177,18 @@ class FilterProtocol(Protocol):
         """Filter by logger name."""
         ...
 
-# Enhanced type aliases with more specific constraints
+
 HeadersType: TypeAlias = Mapping[str, str]
 ParamsType: TypeAlias = Mapping[str, Union[str, List[str]]]
+
 AuthDataType: TypeAlias = Dict[str, Union[str, int, float, bool, List[Union[str, int, float]], Dict[str, Union[str, int, float]]]]
 FilePath: TypeAlias = Union[str, Path]
 
-# More specific async callable types
-AsyncCallable = Callable[..., Awaitable[Union[str, bytes, dict[str, JsonValue], None]]]
+AsyncCallable = Callable[..., Awaitable[Union[str, bytes, Dict[str, JsonValue], None]]]
 AsyncErrorHandler = Callable[[LogRecord, Exception], Awaitable[None]]
 AsyncFilterFunc = Callable[[LogRecord], Awaitable[bool]]
 
-# Type for log record processors with better return type
 LogProcessor = Callable[[LogRecord], Awaitable[Optional[LogRecord]]]
-
-# Type for batch processors with error handling
 BatchProcessor = Callable[[List[LogRecord]], Awaitable[None]]
 
 # HTTP content types with validation
@@ -282,10 +279,17 @@ class AsyncHandlerABC(ABC):
         ...
 
 # More specific factory types with better type safety
-HandlerFactory = Callable[..., Awaitable[HandlerType]]
-LoggerFactory = Callable[..., LoggerType]
-FormatterFactory = Callable[..., FormatterType]
-FilterFactory = Callable[..., FilterType]
+if sys.version_info >= (3, 9):
+    HandlerFactory = Callable[..., Awaitable[HandlerType]]
+    LoggerFactory = Callable[..., LoggerType]
+    FormatterFactory = Callable[..., FormatterType]
+    FilterFactory = Callable[..., FilterType]
+else:
+    # For Python 3.8 compatibility - use simple Callable without type parameters
+    HandlerFactory = Callable
+    LoggerFactory = Callable
+    FormatterFactory = Callable
+    FilterFactory = Callable
 
 # Forward declarations for type checking with better organization
 if TYPE_CHECKING:
@@ -293,23 +297,24 @@ if TYPE_CHECKING:
     from .logger import AsyncLogger
 
 # Enhanced context manager type with generics
-AsyncContextManager = Callable[..., Awaitable[Any]]
-AsyncContextManagerGeneric = Callable[..., Awaitable[T]]
-
-# Event loop getter type with better typing
-LoopGetter = Callable[[], Optional[AbstractEventLoop]]
+if sys.version_info >= (3, 9):
+    AsyncContextManager = Callable[..., Awaitable[Any]]
+    AsyncContextManagerGeneric = Callable[..., Awaitable[T]]
+    LoopGetter = Callable[[], Optional[AbstractEventLoop]]
+    ConfigValidator = Callable[[Dict[str, ConfigValue]], bool]
+    RetryStrategy = Callable[[int, Exception], bool]
+    RateLimiter = Callable[[], Awaitable[bool]]
+else:
+    # For Python 3.8 compatibility - use simple Callable without type parameters
+    AsyncContextManager = Callable
+    AsyncContextManagerGeneric = Callable
+    LoopGetter = Callable
+    ConfigValidator = Callable
+    RetryStrategy = Callable
+    RateLimiter = Callable
 
 # Error handler type with more specific name
 ErrorHandler = AsyncErrorHandler
-
-# Type for configuration validators
-ConfigValidator = Callable[[Dict[str, ConfigValue]], bool]
-
-# Type for retry strategies
-RetryStrategy = Callable[[int, Exception], bool]
-
-# Type for rate limiters
-RateLimiter = Callable[[], Awaitable[bool]]
 
 # Type for HTTP session (forward reference)
 if TYPE_CHECKING:

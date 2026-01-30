@@ -7,38 +7,45 @@ import logging
 import pytest
 import sys
 from io import StringIO
+from typing import List
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 
 from aiologging.handlers.base import AsyncHandler, BufferedAsyncHandler
-from aiologging.handlers.stream import AsyncStreamHandler, AsyncStandardStreamHandler
+from aiologging.handlers.stream import (
+    AsyncStreamHandler,
+    AsyncStandardStreamHandler,
+)
 from aiologging.exceptions import HandlerError, FormatterError
 
 
 # Concrete implementations for testing abstract classes
-class TestAsyncHandlerImpl(AsyncHandler):
+class AsyncHandlerImpl(AsyncHandler):
     """Concrete implementation of AsyncHandler for testing."""
-
-    async def _emit(self, record: logging.LogRecord, formatted_message: str) -> None:
+    async def _emit(
+        self, record: logging.LogRecord, formatted_message: str
+    ) -> None:
         """Mock implementation for testing."""
         pass
 
 
-class TestBufferedAsyncHandlerImpl(BufferedAsyncHandler):
+class BufferedAsyncHandlerImpl(BufferedAsyncHandler):
     """Concrete implementation of BufferedAsyncHandler for testing."""
-
-    async def _emit(self, record: logging.LogRecord, formatted_message: str) -> None:
+    async def _emit(
+        self, record: logging.LogRecord, formatted_message: str
+    ) -> None:
         """Mock implementation for testing."""
         pass
 
-    async def flush(self, records: list[logging.LogRecord]) -> None:
+    async def flush(self, records: List[logging.LogRecord]) -> None:
         """Mock implementation for testing."""
         pass
 
 
-class TestAsyncHandlerImplWithError(AsyncHandler):
+class AsyncHandlerImplWithError(AsyncHandler):
     """Concrete implementation of AsyncHandler for testing error handling."""
-
-    async def _emit(self, record: logging.LogRecord, formatted_message: str) -> None:
+    async def _emit(
+        self, record: logging.LogRecord, formatted_message: str
+    ) -> None:
         """Mock implementation that raises an error."""
         raise Exception("Emit error")
 
@@ -48,7 +55,7 @@ class TestAsyncHandler:
 
     def test_handler_initialization(self) -> None:
         """Test handler initialization."""
-        handler = TestAsyncHandlerImpl(level=logging.INFO)
+        handler = AsyncHandlerImpl(level=logging.INFO)
         assert handler.level == logging.INFO
         assert handler.formatter is None
         assert handler.filters == []
@@ -61,7 +68,7 @@ class TestAsyncHandler:
         filter_mock = MagicMock()
         error_handler = AsyncMock()
 
-        handler = TestAsyncHandlerImpl(
+        handler = AsyncHandlerImpl(
             level=logging.WARNING,
             formatter=formatter,
             filters=[filter_mock],
@@ -75,13 +82,13 @@ class TestAsyncHandler:
 
     def test_set_level(self) -> None:
         """Test setting handler level."""
-        handler = TestAsyncHandlerImpl()
+        handler = AsyncHandlerImpl()
         handler.setLevel(logging.DEBUG)
         assert handler.level == logging.DEBUG
 
     def test_filter_management(self) -> None:
         """Test adding and removing filters."""
-        handler = TestAsyncHandlerImpl()
+        handler = AsyncHandlerImpl()
         filter1 = MagicMock()
         filter2 = MagicMock()
 
@@ -97,7 +104,7 @@ class TestAsyncHandler:
 
     def test_formatter_management(self) -> None:
         """Test setting formatter."""
-        handler = TestAsyncHandlerImpl()
+        handler = AsyncHandlerImpl()
         formatter = MagicMock()
 
         handler.setFormatter(formatter)
@@ -105,10 +112,15 @@ class TestAsyncHandler:
 
     def test_format_without_formatter(self) -> None:
         """Test formatting without a formatter."""
-        handler = TestAsyncHandlerImpl()
+        handler = AsyncHandlerImpl()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="Test message", args=(), exc_info=None
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="Test message",
+            args=(),
+            exc_info=None,
         )
 
         formatted = handler.format(record)
@@ -116,14 +128,19 @@ class TestAsyncHandler:
 
     def test_format_with_formatter(self) -> None:
         """Test formatting with a formatter."""
-        handler = TestAsyncHandlerImpl()
+        handler = AsyncHandlerImpl()
         formatter = MagicMock()
         formatter.format.return_value = "Formatted message"
         handler.setFormatter(formatter)
 
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="Test message", args=(), exc_info=None
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="Test message",
+            args=(),
+            exc_info=None,
         )
 
         formatted = handler.format(record)
@@ -132,14 +149,19 @@ class TestAsyncHandler:
 
     def test_format_with_formatter_error(self) -> None:
         """Test formatting with a formatter that raises an exception."""
-        handler = TestAsyncHandlerImpl()
+        handler = AsyncHandlerImpl()
         formatter = MagicMock()
         formatter.format.side_effect = Exception("Format error")
         handler.setFormatter(formatter)
 
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="Test message", args=(), exc_info=None
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="Test message",
+            args=(),
+            exc_info=None,
         )
 
         with pytest.raises(FormatterError):
@@ -147,7 +169,7 @@ class TestAsyncHandler:
 
     def test_filter_application(self) -> None:
         """Test filter application."""
-        handler = TestAsyncHandlerImpl()
+        handler = AsyncHandlerImpl()
 
         # Create filters
         filter1 = MagicMock()
@@ -159,8 +181,13 @@ class TestAsyncHandler:
         handler.addFilter(filter2)
 
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="Test message", args=(), exc_info=None
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="Test message",
+            args=(),
+            exc_info=None,
         )
 
         # Should return False because filter2 rejects
@@ -170,7 +197,7 @@ class TestAsyncHandler:
 
     def test_is_enabled_for(self) -> None:
         """Test level checking."""
-        handler = TestAsyncHandlerImpl(level=logging.INFO)
+        handler = AsyncHandlerImpl(level=logging.INFO)
 
         assert handler.isEnabledFor(logging.INFO) is True
         assert handler.isEnabledFor(logging.WARNING) is True
@@ -179,12 +206,17 @@ class TestAsyncHandler:
     @pytest.mark.asyncio
     async def test_handle_closed_handler(self) -> None:
         """Test handling with closed handler."""
-        handler = TestAsyncHandlerImpl()
+        handler = AsyncHandlerImpl()
         await handler.close()
 
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="Test message", args=(), exc_info=None
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="Test message",
+            args=(),
+            exc_info=None,
         )
 
         with pytest.raises(HandlerError):
@@ -193,7 +225,7 @@ class TestAsyncHandler:
     @pytest.mark.asyncio
     async def test_handle_filtered_record(self) -> None:
         """Test handling a filtered record."""
-        handler = TestAsyncHandlerImpl()
+        handler = AsyncHandlerImpl()
 
         # Create a filter that rejects all records
         filter_mock = MagicMock()
@@ -204,8 +236,13 @@ class TestAsyncHandler:
         handler.emit = AsyncMock()
 
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="Test message", args=(), exc_info=None
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="Test message",
+            args=(),
+            exc_info=None,
         )
 
         await handler.handle(record)
@@ -216,12 +253,17 @@ class TestAsyncHandler:
     @pytest.mark.asyncio
     async def test_handle_disabled_level(self) -> None:
         """Test handling a record with disabled level."""
-        handler = TestAsyncHandlerImpl(level=logging.WARNING)
+        handler = AsyncHandlerImpl(level=logging.WARNING)
         handler.emit = AsyncMock()
 
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="Test message", args=(), exc_info=None
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="Test message",
+            args=(),
+            exc_info=None,
         )
 
         await handler.handle(record)
@@ -232,13 +274,18 @@ class TestAsyncHandler:
     @pytest.mark.asyncio
     async def test_handle_with_error_handler(self) -> None:
         """Test handling with error handler."""
-        handler = TestAsyncHandlerImplWithError()
+        handler = AsyncHandlerImplWithError()
         error_handler = AsyncMock()
         handler.error_handler = error_handler
 
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="Test message", args=(), exc_info=None
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="Test message",
+            args=(),
+            exc_info=None,
         )
 
         await handler.handle(record)
@@ -247,7 +294,7 @@ class TestAsyncHandler:
     @pytest.mark.asyncio
     async def test_close(self) -> None:
         """Test closing handler."""
-        handler = TestAsyncHandlerImpl()
+        handler = AsyncHandlerImpl()
         await handler.close()
         assert handler._closed is True
 
@@ -257,7 +304,7 @@ class TestBufferedAsyncHandler:
 
     def test_buffered_handler_initialization(self) -> None:
         """Test buffered handler initialization."""
-        handler = TestBufferedAsyncHandlerImpl(
+        handler = BufferedAsyncHandlerImpl(
             buffer_size=50,
             flush_interval=2.0,
             auto_flush=False,
@@ -272,7 +319,7 @@ class TestBufferedAsyncHandler:
     @pytest.mark.asyncio
     async def test_buffered_handler_add_to_buffer(self) -> None:
         """Test adding records to buffer."""
-        handler = TestBufferedAsyncHandlerImpl(buffer_size=2, auto_flush=False)
+        handler = BufferedAsyncHandlerImpl(buffer_size=2, auto_flush=False)
         handler.flush = AsyncMock()
 
         record1, record2 = self._create_test_records("Message 1", "Message 2")
@@ -285,13 +332,18 @@ class TestBufferedAsyncHandler:
         assert len(handler._buffer) == 0  # Should be flushed
         handler.flush.assert_called_once_with([record1, record2])
 
-    def _create_test_records(self, *messages: str) -> list[logging.LogRecord]:
+    def _create_test_records(self, *messages: str) -> List[logging.LogRecord]:
         """Create test log records with the given messages."""
         records = []
         for msg in messages:
             record = logging.LogRecord(
-                name="test", level=logging.INFO, pathname="", lineno=0,
-                msg=msg, args=(), exc_info=None
+                name="test",
+                level=logging.INFO,
+                pathname="",
+                lineno=0,
+                msg=msg,
+                args=(),
+                exc_info=None,
             )
             records.append(record)
         return records
@@ -299,7 +351,7 @@ class TestBufferedAsyncHandler:
     @pytest.mark.asyncio
     async def test_buffered_handler_auto_flush(self) -> None:
         """Test auto-flush functionality."""
-        handler = TestBufferedAsyncHandlerImpl(
+        handler = BufferedAsyncHandlerImpl(
             buffer_size=10,
             flush_interval=0.1,  # Short interval for testing
             auto_flush=True,
@@ -318,7 +370,7 @@ class TestBufferedAsyncHandler:
     @pytest.mark.asyncio
     async def test_buffered_handler_close(self) -> None:
         """Test closing buffered handler."""
-        handler = TestBufferedAsyncHandlerImpl(auto_flush=True)
+        handler = BufferedAsyncHandlerImpl(auto_flush=True)
         handler.flush = AsyncMock()
 
         record = self._create_test_records("Test message")[0]
@@ -359,8 +411,13 @@ class TestAsyncStreamHandler:
         handler = AsyncStreamHandler(stream)
 
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="Test message", args=(), exc_info=None
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="Test message",
+            args=(),
+            exc_info=None,
         )
 
         await handler.emit(record)
@@ -371,15 +428,20 @@ class TestAsyncStreamHandler:
     @pytest.mark.asyncio
     async def test_stream_handler_emit_async_stream(self) -> None:
         """Test emitting to async stream."""
-        async_stream = MagicMock()
+        async_stream = AsyncMock()
         async_stream.write = AsyncMock()
         async_stream.drain = AsyncMock()
 
         handler = AsyncStreamHandler(async_stream)
 
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="Test message", args=(), exc_info=None
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="Test message",
+            args=(),
+            exc_info=None,
         )
 
         await handler.emit(record)
@@ -396,8 +458,13 @@ class TestAsyncStreamHandler:
         handler = AsyncStreamHandler(stream)
 
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="Test message", args=(), exc_info=None
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="Test message",
+            args=(),
+            exc_info=None,
         )
 
         # The handler should handle the error internally and write to stderr

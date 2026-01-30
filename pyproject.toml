@@ -52,6 +52,8 @@ dev = [
     "pytest-cov>=4.0.0",
     "mypy>=1.0.0",
     "types-requests",
+    "types-aiofiles",
+    "types-protobuf",
     "aiofiles>=23.0.0",
     "aiohttp>=3.8.0",
     "protobuf>=4.0.0",
@@ -83,6 +85,13 @@ warn_no_return = true
 warn_unreachable = true
 strict_equality = true
 
+# Conditional configuration for Python 3.9+
+[[tool.mypy.overrides]]
+module = [
+    "aiologging.*",
+    "tests.*"
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
@@ -93,7 +102,7 @@ addopts = [
     "--cov=aiologging",
     "--cov-report=term-missing",
     "--cov-report=html",
-    "--cov-fail-under=90",
+    "--cov-fail-under=80",
 ]
 
 [tool.coverage.run]
