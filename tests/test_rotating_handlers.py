@@ -11,7 +11,10 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
-from aiologging.handlers.rotating import AsyncRotatingFileHandler, AsyncTimedRotatingFileHandler
+from aiologging.handlers.rotating import (
+    AsyncRotatingFileHandler,
+    AsyncTimedRotatingFileHandler,
+)
 from aiologging.exceptions import RotationError
 
 
@@ -26,9 +29,7 @@ class TestAsyncRotatingFileHandler:
 
         try:
             handler = AsyncRotatingFileHandler(
-                filename=filename,
-                max_bytes=1024,
-                backup_count=5
+                filename=filename, max_bytes=1024, backup_count=5
             )
             assert handler.filename == Path(filename)
             assert handler.max_bytes == 1024
@@ -45,14 +46,17 @@ class TestAsyncRotatingFileHandler:
 
         try:
             handler = AsyncRotatingFileHandler(
-                filename=filename,
-                max_bytes=1024,
-                backup_count=5
+                filename=filename, max_bytes=1024, backup_count=5
             )
 
             record = logging.LogRecord(
-                name="test", level=logging.INFO, pathname="", lineno=0,
-                msg="Test message", args=(), exc_info=None
+                name="test",
+                level=logging.INFO,
+                pathname="",
+                lineno=0,
+                msg="Test message",
+                args=(),
+                exc_info=None,
             )
 
             await handler.emit(record)
@@ -77,14 +81,19 @@ class TestAsyncRotatingFileHandler:
             handler = AsyncRotatingFileHandler(
                 filename=filename,
                 max_bytes=10,  # Very small to force rotation
-                backup_count=2
+                backup_count=2,
             )
 
             # Write multiple messages to trigger rotation
             for i in range(5):
                 record = logging.LogRecord(
-                    name="test", level=logging.INFO, pathname="", lineno=0,
-                    msg=f"Test message {i}", args=(), exc_info=None
+                    name="test",
+                    level=logging.INFO,
+                    pathname="",
+                    lineno=0,
+                    msg=f"Test message {i}",
+                    args=(),
+                    exc_info=None,
                 )
                 await handler.emit(record)
 
@@ -114,7 +123,7 @@ class TestAsyncRotatingFileHandler:
             handler = AsyncRotatingFileHandler(
                 filename=filename,
                 max_bytes=10,  # Very small to force rotation
-                backup_count=2
+                backup_count=2,
             )
 
             # Mock the _rotate_file method to raise an exception
@@ -122,8 +131,13 @@ class TestAsyncRotatingFileHandler:
                 mock_rotate.side_effect = Exception("Rotation error")
 
                 record = logging.LogRecord(
-                    name="test", level=logging.INFO, pathname="", lineno=0,
-                    msg="Test message", args=(), exc_info=None
+                    name="test",
+                    level=logging.INFO,
+                    pathname="",
+                    lineno=0,
+                    msg="Test message",
+                    args=(),
+                    exc_info=None,
                 )
 
                 # This should not raise an exception, but should handle the error
@@ -143,9 +157,7 @@ class TestAsyncRotatingFileHandler:
 
         try:
             handler = AsyncRotatingFileHandler(
-                filename=filename,
-                max_bytes=10,
-                backup_count=2
+                filename=filename, max_bytes=10, backup_count=2
             )
 
             # Initially should not rollover
@@ -174,9 +186,7 @@ class TestAsyncRotatingFileHandler:
 
         try:
             handler = AsyncRotatingFileHandler(
-                filename=filename,
-                max_bytes=10,
-                backup_count=2
+                filename=filename, max_bytes=10, backup_count=2
             )
 
             # Write some data to the file
@@ -212,9 +222,7 @@ class TestAsyncRotatingFileHandler:
 
         try:
             handler = AsyncRotatingFileHandler(
-                filename=filename,
-                max_bytes=10,
-                backup_count=2
+                filename=filename, max_bytes=10, backup_count=2
             )
 
             # Create existing backup files
@@ -257,9 +265,7 @@ class TestAsyncRotatingFileHandler:
 
         try:
             handler = AsyncRotatingFileHandler(
-                filename=filename,
-                max_bytes=10,
-                backup_count=2
+                filename=filename, max_bytes=10, backup_count=2
             )
 
             # Create backup files
@@ -296,18 +302,18 @@ class TestAsyncRotatingFileHandler:
             filename = temp_file.name
 
         try:
-            with pytest.raises(RotationError, match="max_bytes must be positive"):
+            with pytest.raises(
+                RotationError, match="max_bytes must be positive"
+            ):
                 AsyncRotatingFileHandler(
-                    filename=filename,
-                    max_bytes=0,  # Invalid
-                    backup_count=5
+                    filename=filename, max_bytes=0, backup_count=5  # Invalid
                 )
 
-            with pytest.raises(RotationError, match="max_bytes must be positive"):
+            with pytest.raises(
+                RotationError, match="max_bytes must be positive"
+            ):
                 AsyncRotatingFileHandler(
-                    filename=filename,
-                    max_bytes=-1,  # Invalid
-                    backup_count=5
+                    filename=filename, max_bytes=-1, backup_count=5  # Invalid
                 )
         finally:
             os.unlink(filename)
@@ -319,11 +325,13 @@ class TestAsyncRotatingFileHandler:
             filename = temp_file.name
 
         try:
-            with pytest.raises(RotationError, match="backup_count must be non-negative"):
+            with pytest.raises(
+                RotationError, match="backup_count must be non-negative"
+            ):
                 AsyncRotatingFileHandler(
                     filename=filename,
                     max_bytes=1024,
-                    backup_count=-1  # Invalid
+                    backup_count=-1,  # Invalid
                 )
         finally:
             os.unlink(filename)
@@ -336,9 +344,7 @@ class TestAsyncRotatingFileHandler:
 
         try:
             handler = AsyncRotatingFileHandler(
-                filename=filename,
-                max_bytes=1024,
-                backup_count=5
+                filename=filename, max_bytes=1024, backup_count=5
             )
 
             repr_str = repr(handler)
@@ -363,10 +369,7 @@ class TestAsyncTimedRotatingFileHandler:
 
         try:
             handler = AsyncTimedRotatingFileHandler(
-                filename=filename,
-                when="H",
-                interval=1,
-                backup_count=5
+                filename=filename, when="H", interval=1, backup_count=5
             )
             assert handler.filename == Path(filename)
             assert handler.when == "H"
@@ -384,15 +387,17 @@ class TestAsyncTimedRotatingFileHandler:
 
         try:
             handler = AsyncTimedRotatingFileHandler(
-                filename=filename,
-                when="H",
-                interval=1,
-                backup_count=5
+                filename=filename, when="H", interval=1, backup_count=5
             )
 
             record = logging.LogRecord(
-                name="test", level=logging.INFO, pathname="", lineno=0,
-                msg="Test message", args=(), exc_info=None
+                name="test",
+                level=logging.INFO,
+                pathname="",
+                lineno=0,
+                msg="Test message",
+                args=(),
+                exc_info=None,
             )
 
             await handler.emit(record)
@@ -414,10 +419,7 @@ class TestAsyncTimedRotatingFileHandler:
 
         try:
             handler = AsyncTimedRotatingFileHandler(
-                filename=filename,
-                when="H",
-                interval=1,
-                backup_count=5
+                filename=filename, when="H", interval=1, backup_count=5
             )
 
             # Get current time
@@ -449,7 +451,7 @@ class TestAsyncTimedRotatingFileHandler:
                 filename=filename,
                 when="S",  # Use seconds for easier testing
                 interval=1,
-                backup_count=5
+                backup_count=5,
             )
 
             # Initially should not rollover
@@ -490,10 +492,7 @@ class TestAsyncTimedRotatingFileHandler:
 
             for when, expected_format in test_cases:
                 handler = AsyncTimedRotatingFileHandler(
-                    filename=filename,
-                    when=when,
-                    interval=1,
-                    backup_count=5
+                    filename=filename, when=when, interval=1, backup_count=5
                 )
 
                 # Get the suffix - this method doesn't exist in the current implementation
@@ -519,7 +518,7 @@ class TestAsyncTimedRotatingFileHandler:
                 filename=filename,
                 when="S",  # Use seconds for easier testing
                 interval=1,
-                backup_count=2
+                backup_count=2,
             )
 
             # Write some data to the file
@@ -536,14 +535,20 @@ class TestAsyncTimedRotatingFileHandler:
             assert os.path.exists(filename)
 
             # Find the backup file (it will have a timestamp suffix)
-            backup_files = [f for f in os.listdir(os.path.dirname(filename))
-                           if f.startswith(os.path.basename(filename)) and f != os.path.basename(filename)]
+            backup_files = [
+                f
+                for f in os.listdir(os.path.dirname(filename))
+                if f.startswith(os.path.basename(filename))
+                and f != os.path.basename(filename)
+            ]
 
             assert len(backup_files) > 0
 
             # Clean up backup files
             for backup_file in backup_files:
-                backup_path = os.path.join(os.path.dirname(filename), backup_file)
+                backup_path = os.path.join(
+                    os.path.dirname(filename), backup_file
+                )
                 if os.path.exists(backup_path):
                     os.unlink(backup_path)
 
@@ -563,7 +568,7 @@ class TestAsyncTimedRotatingFileHandler:
                 filename=filename,
                 when="S",  # Use seconds for easier testing
                 interval=1,
-                backup_count=2
+                backup_count=2,
             )
 
             # Set the rollover time to the past to force rotation
@@ -574,8 +579,13 @@ class TestAsyncTimedRotatingFileHandler:
                 mock_rotate.side_effect = Exception("Rotation error")
 
                 record = logging.LogRecord(
-                    name="test", level=logging.INFO, pathname="", lineno=0,
-                    msg="Test message", args=(), exc_info=None
+                    name="test",
+                    level=logging.INFO,
+                    pathname="",
+                    lineno=0,
+                    msg="Test message",
+                    args=(),
+                    exc_info=None,
                 )
 
                 # This should not raise an exception, but should handle the error
@@ -599,7 +609,7 @@ class TestAsyncTimedRotatingFileHandler:
                     filename=filename,
                     when="X",  # Invalid
                     interval=1,
-                    backup_count=5
+                    backup_count=5,
                 )
         finally:
             os.unlink(filename)
@@ -611,20 +621,24 @@ class TestAsyncTimedRotatingFileHandler:
             filename = temp_file.name
 
         try:
-            with pytest.raises(RotationError, match="interval must be positive"):
+            with pytest.raises(
+                RotationError, match="interval must be positive"
+            ):
                 AsyncTimedRotatingFileHandler(
                     filename=filename,
                     when="H",
                     interval=0,  # Invalid
-                    backup_count=5
+                    backup_count=5,
                 )
 
-            with pytest.raises(RotationError, match="interval must be positive"):
+            with pytest.raises(
+                RotationError, match="interval must be positive"
+            ):
                 AsyncTimedRotatingFileHandler(
                     filename=filename,
                     when="H",
                     interval=-1,  # Invalid
-                    backup_count=5
+                    backup_count=5,
                 )
         finally:
             os.unlink(filename)
@@ -636,12 +650,14 @@ class TestAsyncTimedRotatingFileHandler:
             filename = temp_file.name
 
         try:
-            with pytest.raises(RotationError, match="backup_count must be non-negative"):
+            with pytest.raises(
+                RotationError, match="backup_count must be non-negative"
+            ):
                 AsyncTimedRotatingFileHandler(
                     filename=filename,
                     when="H",
                     interval=1,
-                    backup_count=-1  # Invalid
+                    backup_count=-1,  # Invalid
                 )
         finally:
             os.unlink(filename)
@@ -654,10 +670,7 @@ class TestAsyncTimedRotatingFileHandler:
 
         try:
             handler = AsyncTimedRotatingFileHandler(
-                filename=filename,
-                when="midnight",
-                interval=1,
-                backup_count=5
+                filename=filename, when="midnight", interval=1, backup_count=5
             )
 
             # Get current time
@@ -689,14 +702,18 @@ class TestAsyncTimedRotatingFileHandler:
 
         try:
             # Set a specific time (2:30 AM)
-            at_time = datetime.now().replace(hour=2, minute=30, second=0, microsecond=0).time()
+            at_time = (
+                datetime.now()
+                .replace(hour=2, minute=30, second=0, microsecond=0)
+                .time()
+            )
 
             handler = AsyncTimedRotatingFileHandler(
                 filename=filename,
                 when="midnight",
                 interval=1,
                 backup_count=5,
-                at_time=at_time
+                at_time=at_time,
             )
 
             # Get current time
@@ -730,7 +747,7 @@ class TestAsyncTimedRotatingFileHandler:
                 filename=filename,
                 when="W0",  # Monday
                 interval=1,
-                backup_count=5
+                backup_count=5,
             )
 
             # Get current time
@@ -760,10 +777,7 @@ class TestAsyncTimedRotatingFileHandler:
 
         try:
             handler = AsyncTimedRotatingFileHandler(
-                filename=filename,
-                when="H",
-                interval=1,
-                backup_count=2
+                filename=filename, when="H", interval=1, backup_count=2
             )
 
             # Create some backup files with time suffixes
@@ -806,10 +820,7 @@ class TestAsyncTimedRotatingFileHandler:
 
         try:
             handler = AsyncTimedRotatingFileHandler(
-                filename=filename,
-                when="H",
-                interval=1,
-                backup_count=2
+                filename=filename, when="H", interval=1, backup_count=2
             )
 
             # Create some backup files with time suffixes
@@ -855,10 +866,7 @@ class TestAsyncTimedRotatingFileHandler:
 
         try:
             handler = AsyncTimedRotatingFileHandler(
-                filename=filename,
-                when="H",
-                interval=2,
-                backup_count=5
+                filename=filename, when="H", interval=2, backup_count=5
             )
 
             repr_str = repr(handler)
@@ -870,6 +878,68 @@ class TestAsyncTimedRotatingFileHandler:
 
             await handler.close()
         finally:
+            os.unlink(filename)
+
+
+def test_timestamp_sorting():
+    """Test that files are sorted correctly by timestamp in filename."""
+    with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+        filename = temp_file.name
+
+    try:
+        handler = AsyncTimedRotatingFileHandler(
+            filename=filename, when="H", interval=1, backup_count=2
+        )
+
+        # Create test files with different timestamps
+        base_name = Path(filename).name
+        parent_dir = Path(filename).parent
+
+        # Create backup files with different timestamps
+        old_backup = parent_dir / f"{base_name}.2023-01-01_00"
+        middle_backup = parent_dir / f"{base_name}.2023-01-02_00"
+        newest_backup = parent_dir / f"{base_name}.2023-01-03_00"
+
+        old_backup.write_text("old backup")
+        middle_backup.write_text("middle backup")
+        newest_backup.write_text("newest backup")
+
+        # Test the timestamp extraction
+        print("Testing timestamp extraction:")
+        print(
+            f"Old backup timestamp: {handler._get_timestamp_from_filename(old_backup)}"
+        )
+        print(
+            f"Middle backup timestamp: {handler._get_timestamp_from_filename(middle_backup)}"
+        )
+        print(
+            f"Newest backup timestamp: {handler._get_timestamp_from_filename(newest_backup)}"
+        )
+
+        # Test sorting
+        backup_files = [old_backup, middle_backup, newest_backup]
+        sorted_files = sorted(
+            backup_files,
+            key=handler._get_timestamp_from_filename,
+            reverse=True,
+        )
+
+        print("\nFiles sorted by timestamp (newest first):")
+        for i, file_path in enumerate(sorted_files):
+            print(f"{i+1}. {file_path.name}")
+
+        # The newest file should be first
+        assert sorted_files[0] == newest_backup, "Newest file should be first"
+        assert sorted_files[1] == middle_backup, "Middle file should be second"
+        assert sorted_files[2] == old_backup, "Oldest file should be last"
+
+        # Clean up
+        old_backup.unlink()
+        middle_backup.unlink()
+        newest_backup.unlink()
+
+    finally:
+        if os.path.exists(filename):
             os.unlink(filename)
 
 

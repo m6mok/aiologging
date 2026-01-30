@@ -463,6 +463,36 @@ class AsyncTimedRotatingFileHandler(AsyncFileHandlerWithRotation):
                     rotation_type="time",
                 ) from e
 
+    def _get_timestamp_from_filename(self, file_path: Path) -> tuple[int, ...]:
+        """
+        Extract timestamp from filename suffix and parse it.
+
+        Returns a tuple that can be used for sorting files chronologically.
+        """
+        suffix = file_path.suffix[1:]  # Remove the leading dot
+        try:
+            # Try to parse the timestamp based on the rotation interval
+            if self.when == "S":
+                # Format: YYYY-MM-DD_HH-MM-SS
+                return tuple(map(lambda x: int(x), suffix.split('_')))
+            elif self.when == "M":
+                # Format: YYYY-MM-DD_HH-MM
+                parts = suffix.split('_')
+                date_parts = tuple(map(lambda x: int(x), parts[0].split('-')))
+                time_parts = tuple(map(lambda x: int(x), parts[1].split('-')))
+                return date_parts + time_parts
+            elif self.when == "H":
+                # Format: YYYY-MM-DD_HH
+                parts = suffix.split('_')
+                date_parts = tuple(map(lambda x: int(x), parts[0].split('-')))
+                return date_parts + (int(parts[1]),)
+            else:  # 'D', 'midnight', or weekly
+                # Format: YYYY-MM-DD
+                return tuple(map(lambda x: int(x), suffix.split('-')))
+        except (ValueError, IndexError):
+            # Fallback to modification time if parsing fails
+            return (int(file_path.stat().st_mtime),)
+
     async def _rotate_backups_with_suffix(self, suffix: str) -> None:
         """Rotate existing backup files with time suffixes."""
         if self.backup_count <= 0:
@@ -474,8 +504,8 @@ class AsyncTimedRotatingFileHandler(AsyncFileHandlerWithRotation):
             if file_path != self.filename:
                 backup_files.append(file_path)
 
-        # Sort by modification time (newest first)
-        backup_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        # Sort by the timestamp in the filename (newest first)
+        backup_files.sort(key=self._get_timestamp_from_filename, reverse=True)
 
         # Remove excess backups
         for i, backup_file in enumerate(backup_files):
@@ -504,8 +534,8 @@ class AsyncTimedRotatingFileHandler(AsyncFileHandlerWithRotation):
             if file_path != self.filename:
                 backup_files.append(file_path)
 
-        # Sort by modification time (newest first)
-        backup_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        # Sort by the timestamp in the filename (newest first)
+        backup_files.sort(key=self._get_timestamp_from_filename, reverse=True)
 
         # Remove excess backups
         for i, backup_file in enumerate(backup_files):
