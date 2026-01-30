@@ -34,16 +34,15 @@ try:
     AIOHTTP_AVAILABLE = True
 except ImportError:
     AIOHTTP_AVAILABLE = False
-    aiohttp = None  # type: ignore
 
 # Try to import protobuf
 try:
     from google.protobuf import message
+    assert message
 
     PROTOBUF_AVAILABLE = True
 except ImportError:
     PROTOBUF_AVAILABLE = False
-    message = None  # type: ignore
 
 
 def _check_aiohttp() -> None:
@@ -659,6 +658,8 @@ class AsyncHttpHandler(AsyncHttpHandlerBase):
             error_handler: Optional error handler for exceptions
             batch_config: Configuration for batch processing
         """
+        _check_aiohttp()
+
         super().__init__(
             url,
             method,

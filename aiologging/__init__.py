@@ -22,7 +22,7 @@ Features:
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Optional
 
 from .exceptions import (
     AiologgingError,
@@ -78,107 +78,16 @@ from .types import (
 from .handlers import (
     AsyncHandler,
     BufferedAsyncHandler,
+    AsyncStreamHandler,
+    AsyncFileHandler,
+    AsyncRotatingFileHandler,
+    AsyncTimedRotatingFileHandler,
+    AsyncHttpHandlerBase,
+    AsyncHttpTextHandler,
+    AsyncHttpJsonHandler,
+    AsyncHttpProtoHandler,
+    AsyncHttpHandler,
 )
-
-# Direct import for AsyncStreamHandler to avoid type issues
-from .handlers.stream import AsyncStreamHandler
-
-
-# Helper function to create stub classes with dependency errors
-def _create_dependency_stub(
-    class_name: str, dependency_name: str, install_command: str
-) -> type:
-    """Create a stub class that raises a DependencyError when instantiated."""
-
-    class StubClass:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            from .exceptions import DependencyError
-
-            raise DependencyError(
-                f"{dependency_name} is required for {class_name}. "
-                f"Install with: {install_command}",
-                dependency_name=dependency_name,
-                install_command=install_command,
-            )
-
-    StubClass.__name__ = class_name
-    return StubClass
-
-
-# Import file handlers (require aiofiles)
-if TYPE_CHECKING:
-    from .handlers.file import AsyncFileHandler
-    from .handlers.rotating import (
-        AsyncRotatingFileHandler,
-        AsyncTimedRotatingFileHandler,
-    )
-    from .handlers.http import (
-        AsyncHttpHandlerBase,
-        AsyncHttpTextHandler,
-        AsyncHttpJsonHandler,
-        AsyncHttpProtoHandler,
-        AsyncHttpHandler,
-    )
-else:
-    # Try to import file handlers
-    try:
-        from .handlers import AsyncFileHandler
-    except ImportError:
-        AsyncFileHandler = _create_dependency_stub(
-            "AsyncFileHandler", "aiofiles", "pip install aiologging[aiofiles]"
-        )
-
-    # Try to import rotating file handlers
-    try:
-        from .handlers import (
-            AsyncRotatingFileHandler,
-            AsyncTimedRotatingFileHandler,
-        )
-    except ImportError:
-        AsyncRotatingFileHandler = _create_dependency_stub(
-            "AsyncRotatingFileHandler",
-            "aiofiles",
-            "pip install aiologging[aiofiles]",
-        )
-        AsyncTimedRotatingFileHandler = _create_dependency_stub(
-            "AsyncTimedRotatingFileHandler",
-            "aiofiles",
-            "pip install aiologging[aiofiles]",
-        )
-
-    # Try to import HTTP handlers
-    try:
-        from .handlers import (
-            AsyncHttpHandlerBase,
-            AsyncHttpTextHandler,
-            AsyncHttpJsonHandler,
-            AsyncHttpProtoHandler,
-            AsyncHttpHandler,
-        )
-    except ImportError:
-        AsyncHttpHandlerBase = _create_dependency_stub(
-            "AsyncHttpHandlerBase",
-            "aiohttp",
-            "pip install aiologging[aiohttp]",
-        )
-        AsyncHttpTextHandler = _create_dependency_stub(
-            "AsyncHttpTextHandler",
-            "aiohttp",
-            "pip install aiologging[aiohttp]",
-        )
-        AsyncHttpJsonHandler = _create_dependency_stub(
-            "AsyncHttpJsonHandler",
-            "aiohttp",
-            "pip install aiologging[aiohttp]",
-        )
-        AsyncHttpProtoHandler = _create_dependency_stub(
-            "AsyncHttpProtoHandler",
-            "aiohttp and protobuf",
-            "pip install aiologging[aiohttp,protobuf]",
-        )
-        AsyncHttpHandler = _create_dependency_stub(
-            "AsyncHttpHandler", "aiohttp", "pip install aiologging[aiohttp]"
-        )
 
 # Re-export logging levels for compatibility
 CRITICAL = logging.CRITICAL
@@ -270,40 +179,6 @@ __all__ = [
 ]
 
 
-def _check_optional_dependencies() -> None:
-    """Check for optional dependencies and provide helpful error messages."""
-    import sys
-
-    # Define optional dependencies with their install commands
-    dependencies = {
-        "aiofiles": "pip install aiologging[aiofiles]",
-        "aiohttp": "pip install aiologging[aiohttp]",
-        "google.protobuf": "pip install aiologging[protobuf]",
-    }
-
-    # Check each dependency and collect warnings
-    warnings = []
-    for dep_name, install_cmd in dependencies.items():
-        try:
-            __import__(dep_name)
-        except ImportError:
-            friendly_name = dep_name.split(".")[
-                -1
-            ]  # Get the last part of the module name
-            warnings.append(
-                f"Warning: {friendly_name} not available. "
-                f"Install with: {install_cmd}"
-            )
-
-    # Write all warnings at once for better performance
-    if warnings:
-        sys.stderr.write("\n".join(warnings) + "\n")
-
-
-# Check dependencies on import
-_check_optional_dependencies()
-
-
 # Convenience functions for creating handlers
 def create_stream_handler(
     level: int = NOTSET,
@@ -345,20 +220,6 @@ def create_file_handler(
     Raises:
         DependencyError: If aiofiles is not installed
     """
-    # Check if aiofiles is available by trying to import it
-    try:
-        import aiofiles
-        assert aiofiles
-    except ImportError:
-        from .exceptions import DependencyError
-
-        raise DependencyError(
-            "aiofiles is required for file handlers. "
-            "Install with: pip install aiologging[aiofiles]",
-            dependency_name="aiofiles",
-            install_command="pip install aiologging[aiofiles]",
-        )
-
     return AsyncFileHandler(
         filename, mode, encoding, level=level, formatter=formatter
     )
@@ -389,20 +250,6 @@ def create_http_handler(
     Raises:
         DependencyError: If aiohttp is not installed
     """
-    # Check if aiohttp is available by trying to import it
-    try:
-        import aiohttp
-        assert aiohttp
-    except ImportError:
-        from .exceptions import DependencyError
-
-        raise DependencyError(
-            "aiohttp is required for HTTP handlers. "
-            "Install with: pip install aiologging[aiohttp]",
-            dependency_name="aiohttp",
-            install_command="pip install aiologging[aiohttp]",
-        )
-
     return AsyncHttpHandler(
         url,
         method=method,

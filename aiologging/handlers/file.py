@@ -38,7 +38,6 @@ try:
     AIOFILES_AVAILABLE = True
 except ImportError:
     AIOFILES_AVAILABLE = False
-    aiofiles = None  # type: ignore
 
 
 def _check_aiofiles() -> None:
