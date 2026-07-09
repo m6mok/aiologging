@@ -6,8 +6,8 @@ Guidance for AI coding agents working in this repository.
 
 aiologging — asynchronous logging library for Python (3.9–3.14) that
 mirrors the standard `logging` API with coroutine logging methods.
-Records are enqueued at the call site; a background consumer performs
-handler I/O. Zero required dependencies; optional extras: `aiofiles`,
+Records are enqueued at the call site; a background consumer fans
+them out to per-handler worker queues that perform the I/O. Zero required dependencies; optional extras: `aiofiles`,
 `aiohttp` / `httpx`, `protobuf`.
 
 ## Quick commands

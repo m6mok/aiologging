@@ -2,12 +2,12 @@
 
 [![CI](https://github.com/m6mok/aiologging/actions/workflows/ci.yml/badge.svg)](https://github.com/m6mok/aiologging/actions/workflows/ci.yml)
 
-Asynchronous logging library for Python (3.9–3.14). The API mirrors the standard `logging` module — same method names, signatures, hierarchy and semantics — with the logging methods being coroutines. Records are created at the call site and put on a queue; a background consumer performs the handler I/O, so `await logger.info(...)` never waits for a file write or an HTTP request.
+Asynchronous logging library for Python (3.9–3.14). The API mirrors the standard `logging` module — same method names, signatures, hierarchy and semantics — with the logging methods being coroutines. Records are created at the call site and put on a queue; a background consumer fans them out to per-handler workers that perform the I/O, so `await logger.info(...)` never waits for a file write or an HTTP request.
 
 ## Features
 
 - **logging-compatible API**: same methods, levels, hierarchy, filters and `LogRecord` semantics as the standard `logging` module
-- **Background consumer**: handler I/O happens off the calling coroutine's path; the consumer starts lazily and survives event loop changes
+- **Background consumer**: handler I/O happens off the calling coroutine's path in per-handler workers, so one slow handler never delays the others; everything starts lazily and survives event loop changes
 - **Configurable delivery**: `await` resolves on enqueue (default) or after handlers processed the record (`delivery="await"`)
 - **Configurable backpressure**: bounded queue with `block` (default), `drop_new` or `drop_old` overflow policies
 - **Stdlib bridge**: `captureStdlib()` routes third-party library logs (aiohttp, sqlalchemy, ...) through the same async handlers
@@ -72,11 +72,11 @@ await aiologging.warning("Logged on the root logger")
 
 ### How it works
 
-`await logger.info(...)` synchronously creates the `LogRecord` (so caller info, `%`-formatting and `exc_info` behave exactly like standard logging) and puts it on a bounded queue. A background task drains the queue and dispatches records to the async handlers. By default the `await` resolves as soon as the record is enqueued — logging is nearly free for the calling coroutine.
+`await logger.info(...)` synchronously creates the `LogRecord` (so caller info, `%`-formatting and `exc_info` behave exactly like standard logging) and puts it on a bounded queue. A background task drains the queue and fans each record out to per-handler dispatch queues, each drained by its own worker — so a slow handler (say, an HTTP sink honouring a long retry-after) delays only its own queue, never the other handlers. Per-handler ordering is preserved. By default the `await` resolves as soon as the record is enqueued — logging is nearly free for the calling coroutine.
 
 Lifecycle:
 
-- the consumer starts lazily on the first logged record and is rebuilt transparently if the event loop changes (e.g. one loop per test);
+- the consumer and the handler workers start lazily on the first logged record and are rebuilt transparently if the event loop changes (e.g. one loop per test);
 - `await aiologging.flush()` waits until everything queued has been handled;
 - `await aiologging.shutdown()` drains the queue and closes all handlers — call it once at application exit.
 

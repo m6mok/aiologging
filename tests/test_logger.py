@@ -459,9 +459,9 @@ class TestOverflowPolicies:
         logger.setLevel(logging.DEBUG)
         logger.addHandler(handler)
 
-        await logger.info("r1")  # consumer takes it and blocks
+        await logger.info("r1")  # the handler worker takes it and blocks
         await drain_until_blocked(manager)
-        await logger.info("r2")  # fills the single queue slot
+        await logger.info("r2")  # fills the handler's single queue slot
         return manager, logger, handler
 
     async def test_drop_new(self) -> None:
@@ -487,15 +487,109 @@ class TestOverflowPolicies:
     async def test_block_waits_for_space(self) -> None:
         manager, logger, handler = await self._stuck_manager("block")
 
-        blocked = asyncio.ensure_future(logger.info("r3"))
+        # r1 is in the handler worker, r2 in its dispatch queue; r3
+        # is held by the consumer (blocked on the full dispatch
+        # queue) and r4 fills the single main-queue slot, so r5 must
+        # wait for space
+        await logger.info("r3")
+        await drain_until_blocked(manager)
+        await logger.info("r4")
+
+        blocked = asyncio.ensure_future(logger.info("r5"))
         await asyncio.sleep(0.01)
         assert not blocked.done()  # queue is full, producer waits
 
         handler.release.set()
         await asyncio.wait_for(blocked, timeout=2)
         await manager.flush()
-        assert handler.messages == ["r1", "r2", "r3"]
+        assert handler.messages == ["r1", "r2", "r3", "r4", "r5"]
         assert manager.get_metrics()["records_dropped"] == 0
+        await manager.shutdown()
+
+
+class TestConcurrentHandlerDispatch:
+    """Per-handler workers: a slow handler must not delay the rest."""
+
+    async def test_slow_handler_does_not_block_fast_one(self) -> None:
+        manager = AsyncLoggerManager()
+        slow = BlockingHandler()
+        fast = RecordingHandler()
+        logger = manager.getLogger("app")
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(slow)
+        logger.addHandler(fast)
+
+        await logger.info("r1")
+        await logger.info("r2")
+
+        # the slow handler is stuck on r1; the fast one gets both
+        # records without waiting for it
+        for _ in range(500):
+            if len(fast.records) == 2:
+                break
+            await asyncio.sleep(0.001)
+        assert fast.messages == ["r1", "r2"]
+        assert slow.records == []
+
+        slow.release.set()
+        await manager.flush()
+        assert slow.messages == ["r1", "r2"]
+        await manager.shutdown()
+
+    async def test_per_handler_order_is_preserved(self) -> None:
+        manager = AsyncLoggerManager()
+        handler = RecordingHandler()
+        logger = manager.getLogger("app")
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+
+        for i in range(50):
+            await logger.info("msg %d", i)
+        await manager.flush()
+        assert handler.messages == [f"msg {i}" for i in range(50)]
+        await manager.shutdown()
+
+    async def test_await_delivery_waits_for_all_handlers(self) -> None:
+        manager = AsyncLoggerManager(delivery="await")
+        slow = BlockingHandler()
+        fast = RecordingHandler()
+        logger = manager.getLogger("app")
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(slow)
+        logger.addHandler(fast)
+
+        pending = asyncio.ensure_future(logger.info("r1"))
+        await asyncio.sleep(0.01)
+        assert not pending.done()  # the slow handler has not finished
+
+        slow.release.set()
+        await asyncio.wait_for(pending, timeout=2)
+        assert fast.messages == ["r1"]
+        assert slow.messages == ["r1"]
+        await manager.shutdown()
+
+    async def test_handler_error_does_not_affect_other_handler(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        class ExplodingHandler(AsyncHandler):
+            async def handle(self, record: LogRecord) -> None:
+                raise RuntimeError("boom")
+
+            async def _emit(
+                self, record: LogRecord, formatted_message: str
+            ) -> None:  # pragma: no cover
+                pass
+
+        manager = AsyncLoggerManager(delivery="await")
+        good = RecordingHandler()
+        logger = manager.getLogger("app")
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(ExplodingHandler())
+        logger.addHandler(good)
+
+        await logger.info("survives")
+        assert good.messages == ["survives"]
+        assert "Error in handler ExplodingHandler" in capsys.readouterr().err
         await manager.shutdown()
 
 

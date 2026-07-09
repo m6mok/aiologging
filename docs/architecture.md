@@ -21,8 +21,15 @@ asyncio.Queue (bounded, default 10 000)
   │   overflow policy: "block" | "drop_new" | "drop_old"
   ▼
 consumer task ("aiologging-consumer", one per manager)
-  │   logger.callHandlers(record): walks the hierarchy while
-  │   propagate is set; handler errors go to stderr and never
+  │   fan-out: walks the hierarchy while propagate is set
+  │   (level checks, lastResort) and enqueues the record on
+  │   each eligible handler's dispatch queue
+  ▼
+per-handler dispatch queues + worker tasks
+  │   ("aiologging-handler-<Type>", one per handler, created on
+  │   first dispatch) — a slow handler only backs up its own
+  │   queue, never the other handlers; ordering is preserved
+  │   per handler; handler errors go to stderr and never
   │   interrupt dispatch
   ▼
 async handlers (stream / file / rotating / HTTP / Telegram)
@@ -37,9 +44,9 @@ Key pieces, all in `aiologging/logger.py`:
   Mirrors `QueueHandler.prepare`.
 - **Delivery modes** (`DeliveryMode`): `"enqueue"` (default) — the
   await resolves once the record is queued; `"await"` — a future is
-  attached to the queue item and resolved by the consumer after
-  handlers processed the record. Selectable per call, per logger, or
-  manager-wide.
+  attached to the queue item and resolved (via `_RecordCompletion`)
+  once the last handler worker finished with the record. Selectable
+  per call, per logger, or manager-wide.
 - **Overflow policies** (`OverflowPolicy`): `"block"` awaits free
   space, `"drop_new"` discards the incoming record, `"drop_old"`
   discards the oldest queued one. Drops are counted in metrics.
@@ -47,7 +54,12 @@ Key pieces, all in `aiologging/logger.py`:
   task on the first record and rebuilds it when the running event
   loop changes (e.g. one loop per test) or the task died. Records
   stuck in the old queue — including the in-flight one — are rescued
-  into `_pending` and redelivered.
+  into `_pending` and redelivered. `_HandlerDispatcher` follows the
+  same lifecycle for each handler's queue and worker.
+- **Overflow applies per queue** — the policy also governs the
+  per-handler dispatch queues (each bounded by `queue_size`), so
+  with `"block"` a full dispatch queue suspends the consumer and
+  backpressure propagates to the main queue and the producers.
 - **`_IN_CONSUMER` ContextVar** — set inside the consumer task so the
   stdlib bridge can drop records emitted *by handler I/O libraries
   themselves* (e.g. aiohttp logging during an HTTP flush), preventing
@@ -55,10 +67,11 @@ Key pieces, all in `aiologging/logger.py`:
 - **`AsyncLoggerManager`** — owns the hierarchy (`getLogger` with
   dotted names, root at WARNING, eager intermediate loggers), the
   queue and the consumer. The global instance is
-  `logger._logger_manager`. `shutdown()` drains the queue, cancels
-  the consumer, closes every handler and resets the hierarchy to a
-  pristine state; `flush()` is `queue.join()` plus `force_flush()`
-  on buffered handlers.
+  `logger._logger_manager`. `shutdown()` drains the queues, cancels
+  the consumer and the handler workers, closes every handler and
+  resets the hierarchy to a pristine state; `flush()` joins the main
+  queue, then every dispatch queue, then calls `force_flush()` on
+  buffered handlers.
 - **atexit hook** warns to stderr if records were never delivered
   (user forgot `await aiologging.shutdown()`).
 

@@ -8,8 +8,10 @@ the logging methods being coroutines.
 Records are created synchronously at the call site (so caller
 information, ``%``-formatting and ``exc_info`` behave exactly like in
 standard logging) and put on a bounded queue. A background consumer
-task drains the queue and dispatches records to the async handlers, so
-the awaiting coroutine never pays for handler I/O.
+task drains the queue and fans each record out to per-handler dispatch
+queues, each drained by its own worker task — the awaiting coroutine
+never pays for handler I/O, and one slow handler (e.g. an HTTP sink
+honouring a long retry-after) cannot delay delivery to the others.
 
 The consumer starts lazily on the first logged record and is restarted
 transparently if the running event loop changes (e.g. one loop per
@@ -71,6 +73,8 @@ DeliveryMode = Literal["enqueue", "await"]
 OverflowPolicy = Literal["block", "drop_new", "drop_old"]
 
 _QueueItem = Tuple["AsyncLogger", LogRecord, "Optional[asyncio.Future[None]]"]
+
+_DispatchItem = Tuple["AsyncLogger", LogRecord, "_RecordCompletion"]
 
 # Set inside the consumer task so the stdlib bridge can detect (and
 # drop) records emitted by the handlers themselves — otherwise a
@@ -528,16 +532,19 @@ class AsyncLogger:
             return
         await self.manager.enqueue(self, record)
 
-    async def callHandlers(self, record: LogRecord) -> None:
+    def _collect_handlers(
+        self, record: LogRecord
+    ) -> Tuple[List[AsyncHandler], int]:
         """
-        Pass a record to all relevant handlers, walking the hierarchy
+        Collect the handlers a record goes to, walking the hierarchy
         while ``propagate`` is set (like stdlib ``callHandlers``).
 
-        Runs inside the consumer task. Handler errors are reported to
-        stderr and never interrupt dispatch.
+        Returns the eligible handlers plus the total number of
+        handlers seen (for the lastResort decision).
         """
-        logger: Optional[AsyncLogger] = self
+        handlers: List[AsyncHandler] = []
         found = 0
+        logger: Optional[AsyncLogger] = self
         while logger is not None:
             # A closed logger's handlers are closed too — skip them the
             # same way records on a closed logger are dropped
@@ -551,15 +558,30 @@ class AsyncLogger:
                         and logger._error_handler is not None
                     ):
                         handler.error_handler = logger._error_handler
-                    try:
-                        await handler.handle(record)
-                    except Exception as e:
-                        sys.stderr.write(
-                            f"Error in handler {type(handler).__name__}: "
-                            f"{e}\n"
-                            f"Record: {record.getMessage()}\n"
-                        )
+                    handlers.append(handler)
             logger = logger.parent if logger.propagate else None
+        return handlers, found
+
+    async def callHandlers(self, record: LogRecord) -> None:
+        """
+        Pass a record to all relevant handlers, walking the hierarchy
+        while ``propagate`` is set (like stdlib ``callHandlers``).
+
+        Awaits each handler in turn; the consumer instead fans records
+        out to per-handler workers (see ``_HandlerDispatcher``) so a
+        slow handler cannot delay the others. Handler errors are
+        reported to stderr and never interrupt dispatch.
+        """
+        handlers, found = self._collect_handlers(record)
+        for handler in handlers:
+            try:
+                await handler.handle(record)
+            except Exception as e:
+                sys.stderr.write(
+                    f"Error in handler {type(handler).__name__}: "
+                    f"{e}\n"
+                    f"Record: {record.getMessage()}\n"
+                )
 
         # Last-resort output, mirroring logging.lastResort
         if found == 0 and record.levelno >= WARNING:
@@ -637,6 +659,213 @@ class AsyncLogger:
         return f"<{self.__class__.__name__} {self.name} ({level})>"
 
 
+class _RecordCompletion:
+    """
+    Track one record across its per-handler dispatches.
+
+    Created by the consumer when a record is fanned out; each handler
+    worker (or a drop from a full dispatch queue) accounts for one
+    dispatch. When the last one completes the record counts as
+    processed and the delivery-"await" future, if any, is resolved.
+    """
+
+    __slots__ = ("_logger", "_remaining", "fut")
+
+    def __init__(
+        self,
+        logger: AsyncLogger,
+        remaining: int,
+        fut: Optional[asyncio.Future[None]],
+    ) -> None:
+        self._logger = logger
+        self._remaining = remaining
+        self.fut = fut
+        if remaining <= 0:
+            self._finish()
+
+    def done_one(self) -> None:
+        """Account for one finished (or dropped) handler dispatch."""
+        self._remaining -= 1
+        if self._remaining <= 0:
+            self._finish()
+
+    def _finish(self) -> None:
+        self._logger._metrics.increment_processed()
+        fut = self.fut
+        if fut is not None and not fut.done():
+            try:
+                fut.set_result(None)
+            except RuntimeError:  # pragma: no cover - dead-loop future
+                # The awaiting producer died with its event loop
+                pass
+
+
+class _HandlerDispatcher:
+    """
+    Per-handler dispatch queue plus worker task.
+
+    The consumer fans records out to these instead of awaiting the
+    handlers itself, so one slow handler (e.g. an HTTP sink honouring
+    a long retry-after) cannot delay delivery to the other handlers.
+    Each handler keeps its own FIFO queue, so per-handler ordering is
+    preserved.
+
+    Mirrors the consumer's lifecycle: the worker starts lazily, is
+    rebuilt when the running event loop changes or the task died, and
+    queued plus in-flight items are rescued into ``_pending`` when
+    that happens.
+    """
+
+    def __init__(
+        self, handler: AsyncHandler, manager: AsyncLoggerManager
+    ) -> None:
+        self._handler = handler
+        self._manager = manager
+        self._queue: Optional[asyncio.Queue[_DispatchItem]] = None
+        self._task: Optional[asyncio.Task[None]] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._pending: Deque[_DispatchItem] = deque(
+            maxlen=manager.queue_size
+        )
+        self._in_flight: Optional[_DispatchItem] = None
+
+    def running(self) -> bool:
+        """Signal whether the worker task is alive."""
+        return self._task is not None and not self._task.done()
+
+    def undelivered(self) -> int:
+        """Number of records not yet handled (for the atexit warning)."""
+        queued = self._queue.qsize() if self._queue is not None else 0
+        return queued + len(self._pending)
+
+    def ensure_worker(self) -> None:
+        """
+        Start the worker task lazily; rebuild it if the running loop
+        changed or the task died, rescuing stuck items.
+
+        Must be called with a running event loop.
+        """
+        loop = asyncio.get_running_loop()
+        if (
+            self._task is not None
+            and self._loop is loop
+            and not self._task.done()
+        ):
+            return
+
+        if self._queue is not None:
+            if self._in_flight is not None:
+                self._pending.appendleft(self._in_flight)
+                self._in_flight = None
+            try:
+                while True:
+                    self._pending.append(self._queue.get_nowait())
+            except asyncio.QueueEmpty:
+                pass
+
+        self._loop = loop
+        self._queue = asyncio.Queue(maxsize=self._manager.queue_size)
+
+        while self._pending:
+            item = self._pending.popleft()
+            try:
+                self._queue.put_nowait(item)
+            except asyncio.QueueFull:  # pragma: no cover - same maxlen
+                self._manager._drop(item[0])
+                item[2].done_one()
+
+        self._task = loop.create_task(
+            self._run(self._queue),
+            name=f"aiologging-handler-{type(self._handler).__name__}",
+        )
+
+    async def put(self, item: _DispatchItem) -> None:
+        """Enqueue an item, applying the manager's overflow policy."""
+        self.ensure_worker()
+        queue = self._queue
+        if queue is None:  # pragma: no cover - ensure_worker creates it
+            return
+
+        if self._manager.overflow == "block":
+            await queue.put(item)
+        elif self._manager.overflow == "drop_new":
+            try:
+                queue.put_nowait(item)
+            except asyncio.QueueFull:
+                self._manager._drop(item[0])
+                item[2].done_one()
+        else:  # drop_old
+            while True:
+                try:
+                    queue.put_nowait(item)
+                    return
+                except asyncio.QueueFull:
+                    try:
+                        old = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        continue
+                    queue.task_done()
+                    self._manager._drop(old[0])
+                    old[2].done_one()
+
+    async def join(self) -> None:
+        """Wait until every queued item has been handled."""
+        if self._queue is None and not self._pending:
+            return
+        self.ensure_worker()
+        queue = self._queue
+        if queue is not None:
+            await queue.join()
+
+    async def _run(self, queue: asyncio.Queue[_DispatchItem]) -> None:
+        """Drain the dispatch queue, handling records one at a time."""
+        token = _IN_CONSUMER.set(True)
+        try:
+            while True:
+                item = await queue.get()
+                _, record, completion = item
+                self._in_flight = item
+                interrupted = False
+                try:
+                    await self._handler.handle(record)
+                except asyncio.CancelledError:
+                    # Dispatch interrupted (loop teardown): leave the
+                    # item in _in_flight so a rebuilt worker can
+                    # rescue and redeliver it
+                    interrupted = True
+                    raise
+                except Exception as e:
+                    sys.stderr.write(
+                        f"Error in handler "
+                        f"{type(self._handler).__name__}: {e}\n"
+                        f"Record: {record.getMessage()}\n"
+                    )
+                finally:
+                    if not interrupted:
+                        self._in_flight = None
+                        completion.done_one()
+                    queue.task_done()
+        finally:
+            _IN_CONSUMER.reset(token)
+
+    async def stop(self) -> None:
+        """Cancel the worker and reset the dispatcher state."""
+        task = self._task
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        self._task = None
+        self._queue = None
+        self._loop = None
+        self._pending.clear()
+        self._in_flight = None
+
+
 class AsyncLoggerManager:
     """
     Manager owning the logger hierarchy and the record queue.
@@ -644,11 +873,13 @@ class AsyncLoggerManager:
     Mirrors ``logging.Manager`` for the hierarchy part (``getLogger``
     with dotted names, a ``root`` logger at WARNING) and additionally
     owns the machinery that makes logging asynchronous: a bounded
-    ``asyncio.Queue`` plus a single background consumer task that
-    dispatches records to handlers.
+    ``asyncio.Queue`` plus a background consumer task that fans
+    records out to per-handler dispatch queues, each drained by its
+    own worker task — so one slow handler cannot delay the others.
 
-    The consumer starts lazily on the first enqueued record and is
-    rebuilt automatically when the running event loop changes.
+    The consumer and the handler workers start lazily on the first
+    record and are rebuilt automatically when the running event loop
+    changes.
     """
 
     def __init__(
@@ -677,6 +908,9 @@ class AsyncLoggerManager:
         # together with the queue when the event loop changes
         self._in_flight: Optional[Tuple[AsyncLogger, LogRecord]] = None
         self._records_dropped = 0
+        # One dispatch queue + worker per handler, created on first
+        # dispatch, so a slow handler never delays the other handlers
+        self._dispatchers: Dict[AsyncHandler, _HandlerDispatcher] = {}
 
     # ------------------------------------------------------------------
     # Hierarchy
@@ -879,7 +1113,7 @@ class AsyncLoggerManager:
         )
 
     async def _consume(self, queue: asyncio.Queue[_QueueItem]) -> None:
-        """Drain the queue, dispatching records to handlers."""
+        """Drain the queue, fanning records out to handler workers."""
         token = _IN_CONSUMER.set(True)
         try:
             while True:
@@ -887,8 +1121,7 @@ class AsyncLoggerManager:
                 self._in_flight = (logger, record)
                 interrupted = False
                 try:
-                    await logger.callHandlers(record)
-                    logger._metrics.increment_processed()
+                    await self._dispatch(logger, record, fut)
                 except asyncio.CancelledError:
                     # Dispatch interrupted (loop teardown): leave the
                     # record in _in_flight so a rebuilt consumer can
@@ -900,14 +1133,45 @@ class AsyncLoggerManager:
                     sys.stderr.write(
                         f"Error in logger {logger.name}: {e}\n"
                     )
+                    # The completion may never fire; unblock the
+                    # producer awaiting delivery
+                    if fut is not None and not fut.done():
+                        fut.set_result(None)
                 finally:
                     if not interrupted:
                         self._in_flight = None
-                    if fut is not None and not fut.done():
-                        fut.set_result(None)
                     queue.task_done()
         finally:
             _IN_CONSUMER.reset(token)
+
+    async def _dispatch(
+        self,
+        logger: AsyncLogger,
+        record: LogRecord,
+        fut: Optional[asyncio.Future[None]],
+    ) -> None:
+        """
+        Fan a record out to the dispatch queues of all its handlers.
+
+        The hierarchy walk and level checks happen here, synchronously;
+        the handler I/O runs in the per-handler workers, so a slow
+        handler only delays its own queue. With the "block" overflow
+        policy a full dispatch queue suspends the consumer, which
+        propagates backpressure to the main queue and the producers.
+        """
+        handlers, found = logger._collect_handlers(record)
+
+        # Last-resort output, mirroring logging.lastResort
+        if found == 0 and record.levelno >= WARNING:
+            sys.stderr.write(f"{record.getMessage()}\n")
+
+        completion = _RecordCompletion(logger, len(handlers), fut)
+        for handler in handlers:
+            dispatcher = self._dispatchers.get(handler)
+            if dispatcher is None:
+                dispatcher = _HandlerDispatcher(handler, self)
+                self._dispatchers[handler] = dispatcher
+            await dispatcher.put((logger, record, completion))
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -920,12 +1184,17 @@ class AsyncLoggerManager:
         """
         if self._pending:
             self._ensure_consumer()
-        if self._queue is None:
-            return
-        self._ensure_consumer()
-        queue = self._queue
-        if queue is not None:
-            await queue.join()
+        if self._queue is not None:
+            self._ensure_consumer()
+            queue = self._queue
+            if queue is not None:
+                await queue.join()
+
+        # The consumer marks a record done only after fanning it out,
+        # so once the main queue is joined every record sits in a
+        # dispatch queue — join those to wait for the handler I/O
+        for dispatcher in list(self._dispatchers.values()):
+            await dispatcher.join()
 
         for logger in [self.root, *self.loggerDict.values()]:
             for handler in logger.handlers:
@@ -967,6 +1236,10 @@ class AsyncLoggerManager:
         self._pending.clear()
         self._in_flight = None
 
+        for dispatcher in list(self._dispatchers.values()):
+            await dispatcher.stop()
+        self._dispatchers.clear()
+
         for logger in [self.root, *self.loggerDict.values()]:
             try:
                 await logger.close()
@@ -988,6 +1261,10 @@ class AsyncLoggerManager:
             "consumer_running": int(
                 self._consumer_task is not None
                 and not self._consumer_task.done()
+            ),
+            "handler_workers_running": sum(
+                int(dispatcher.running())
+                for dispatcher in self._dispatchers.values()
             ),
         }
 
@@ -1105,6 +1382,8 @@ def _warn_undrained_at_exit() -> None:
     undrained = (queue.qsize() if queue is not None else 0) + len(
         _logger_manager._pending
     )
+    for dispatcher in _logger_manager._dispatchers.values():
+        undrained += dispatcher.undelivered()
     if undrained:
         sys.stderr.write(
             f"aiologging: {undrained} log record(s) were never delivered; "
