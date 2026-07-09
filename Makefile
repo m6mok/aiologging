@@ -1,4 +1,4 @@
-.PHONY: all setup-envs test-all mypy-all quick-test quick-mypy check-versions clean help
+.PHONY: all setup-envs test-all mypy-all quick-test quick-mypy stress stress-quick check-versions clean help
 
 # Версии Python для тестирования через uv
 PYTHON_VERSIONS = 3.9 3.10 3.11 3.12 3.13 3.14
@@ -60,6 +60,13 @@ quick-test:
 quick-mypy:
 	VIRTUAL_ENV=.venv-$(QUICK_VERSION) uv run --active --python $(QUICK_VERSION) mypy --cache-dir .mypy_cache-$(QUICK_VERSION) aiologging/
 
+# Стресс-тесты (см. docs/stress-testing.md)
+stress:
+	VIRTUAL_ENV=.venv-$(QUICK_VERSION) uv run --active --python $(QUICK_VERSION) python -m stress run --json logs/stress-report.json
+
+stress-quick:
+	VIRTUAL_ENV=.venv-$(QUICK_VERSION) uv run --active --python $(QUICK_VERSION) python -m stress run --quick
+
 # Проверка установленных версий Python через uv
 check-versions:
 	@echo "=== Проверка установленных версий Python ==="
@@ -91,6 +98,8 @@ help:
 	@echo "  make mypy-python3.X   - Запустить mypy на конкретной версии Python"
 	@echo "  make quick-test       - Быстрый тест на Python $(QUICK_VERSION)"
 	@echo "  make quick-mypy       - Быстрая проверка mypy на Python $(QUICK_VERSION)"
+	@echo "  make stress           - Полный стресс-прогон (минуты, JSON в logs/)"
+	@echo "  make stress-quick     - Быстрый стресс-прогон (~10 секунд)"
 	@echo "  make setup-envs       - Настроить окружения для всех версий Python"
 	@echo "  make check-versions   - Проверить установленные версии Python"
 	@echo "  make clean            - Очистить кэши и временные файлы"
