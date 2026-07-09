@@ -50,6 +50,7 @@ from .exceptions import ContextError
 from .handlers.base import AsyncHandler
 from .types import (
     AsyncErrorHandler,
+    DropPolicyProtocol,
     FilterProtocol,
     RateLimiter,
 )
@@ -156,6 +157,68 @@ def _freeze_record(record: LogRecord) -> LogRecord:
             )
         record.exc_info = None
     return record
+
+
+class LevelAwareDrop:
+    """
+    Opt-in queue drop policy: under pressure, low-severity records
+    are sacrificed before high-severity ones.
+
+    Mirrors rsyslog's ``discardSeverity`` and logback's
+    ``discardingThreshold``, both disabled by default — enabling this
+    trades completeness of low-level context for the guarantee that
+    errors survive overload:
+
+    - an *arriving* record below ``discard_below`` is discarded once
+      the queue is at least ``watermark`` full (below the watermark
+      low-severity context flows normally);
+    - when the queue is completely full, the oldest *queued* record
+      below ``discard_below`` is evicted to make room for the
+      arriving one; with no such victim the configured overflow
+      policy applies as usual.
+
+    Applies to the main record queue and the per-handler dispatch
+    queues. Enable it with ``basicConfig(drop_policy=...)`` or by
+    setting ``manager.drop_policy``.
+    """
+
+    def __init__(
+        self,
+        discard_below: Union[int, str] = WARNING,
+        watermark: float = 0.8,
+    ) -> None:
+        """
+        Initialize the policy.
+
+        Args:
+            discard_below: Records strictly below this level (number
+                or name) are expendable; the default WARNING makes
+                DEBUG and INFO records expendable
+            watermark: Queue fill ratio (0..1] at which arriving
+                expendable records start being discarded
+
+        Raises:
+            ValueError: If watermark is outside (0, 1] or the level
+                name is unknown
+        """
+        if not 0.0 < watermark <= 1.0:
+            raise ValueError("watermark must be within (0, 1]")
+        self.discard_below = _check_level(discard_below)
+        self.watermark = watermark
+
+    def is_expendable(self, record: LogRecord) -> bool:
+        """Signal that a queued record may be evicted when full."""
+        return record.levelno < self.discard_below
+
+    def should_discard_arriving(
+        self, record: LogRecord, qsize: int, capacity: int
+    ) -> bool:
+        """Signal that an arriving record should be discarded."""
+        return (
+            capacity > 0
+            and record.levelno < self.discard_below
+            and qsize >= self.watermark * capacity
+        )
 
 
 class AsyncLoggerMetrics:
@@ -796,6 +859,16 @@ class _HandlerDispatcher:
         if queue is None:  # pragma: no cover - ensure_worker creates it
             return
 
+        manager = self._manager
+        if manager.drop_policy is not None:
+            if manager._shed_arriving(queue, item[1]):
+                manager._account_dropped_item(item)
+                return
+            if manager._try_put_evicting(queue, item):
+                return
+            # no expendable victims: fall through to the configured
+            # overflow policy below
+
         if self._manager.overflow == "block":
             await queue.put(item)
         elif self._manager.overflow == "drop_new":
@@ -915,12 +988,16 @@ class AsyncLoggerManager:
         queue_size: int = 10_000,
         overflow: OverflowPolicy = "block",
         delivery: DeliveryMode = "enqueue",
+        drop_policy: Optional[DropPolicyProtocol] = None,
     ) -> None:
         self.loggerDict: Dict[str, AsyncLogger] = {}
         self.disable_level: int = NOTSET
         self.queue_size = queue_size
         self.overflow: OverflowPolicy = overflow
         self.delivery: DeliveryMode = delivery
+        # Optional level-aware drop policy (e.g. LevelAwareDrop);
+        # None keeps the pure FIFO overflow behaviour
+        self.drop_policy = drop_policy
         self.root = AsyncLogger("root", level=WARNING, manager=self)
 
         self._queue: Optional[asyncio.Queue[_QueueItem]] = None
@@ -998,18 +1075,28 @@ class AsyncLoggerManager:
             fut = asyncio.get_running_loop().create_future()
         item: _QueueItem = (logger, record, fut)
 
-        if self.overflow == "block":
-            await queue.put(item)
-        elif self.overflow == "drop_new":
-            try:
-                queue.put_nowait(item)
-            except asyncio.QueueFull:
-                self._drop(logger)
-                if fut is not None:
-                    fut.set_result(None)
+        placed = False
+        if self.drop_policy is not None:
+            if self._shed_arriving(queue, record):
+                self._account_dropped_item(item)
                 return
-        else:  # drop_old
-            self._put_drop_old(queue, item)
+            placed = self._try_put_evicting(queue, item)
+            # no expendable victims: fall through to the configured
+            # overflow policy below
+
+        if not placed:
+            if self.overflow == "block":
+                await queue.put(item)
+            elif self.overflow == "drop_new":
+                try:
+                    queue.put_nowait(item)
+                except asyncio.QueueFull:
+                    self._drop(logger)
+                    if fut is not None:
+                        fut.set_result(None)
+                    return
+            else:  # drop_old
+                self._put_drop_old(queue, item)
 
         if fut is not None:
             await fut
@@ -1038,6 +1125,73 @@ class AsyncLoggerManager:
         self._records_dropped += 1
         if logger is not None:
             logger._metrics.increment_dropped()
+
+    def _account_dropped_item(self, item: Any) -> None:
+        """
+        Account for a dropped queue item and unblock whoever waits
+        on it: works for main-queue items (delivery-"await" future)
+        and dispatch items (``_RecordCompletion``) alike.
+        """
+        self._drop(item[0])
+        tail = item[2]
+        if tail is None:
+            return
+        if isinstance(tail, _RecordCompletion):
+            tail.done_one()
+        elif not tail.done():
+            tail.set_result(None)
+
+    def _shed_arriving(
+        self, queue: asyncio.Queue[Any], record: LogRecord
+    ) -> bool:
+        """Ask the drop policy whether to discard the arriving record."""
+        policy = self.drop_policy
+        if policy is None:
+            return False
+        return policy.should_discard_arriving(
+            record, queue.qsize(), queue.maxsize
+        )
+
+    def _evict_expendable(self, queue: asyncio.Queue[Any]) -> Optional[Any]:
+        """
+        Remove and return the oldest queued item whose record the
+        drop policy deems expendable; None when the policy is unset
+        or no queued record qualifies.
+
+        Reaches into the queue's internal deque — asyncio.Queue can
+        only remove the head. ``task_done()`` keeps the ``join()``
+        bookkeeping consistent with the silent removal.
+        """
+        policy = self.drop_policy
+        if policy is None:
+            return None
+        internal = getattr(queue, "_queue", None)
+        if internal is None:  # pragma: no cover - CPython detail
+            return None
+        for index, queued in enumerate(internal):
+            if policy.is_expendable(queued[1]):
+                del internal[index]
+                queue.task_done()
+                return queued
+        return None
+
+    def _try_put_evicting(
+        self, queue: asyncio.Queue[Any], item: Any
+    ) -> bool:
+        """
+        ``put_nowait``, evicting expendable queued records to make
+        room; False when the queue stays full (no victims — the
+        caller falls back to the configured overflow policy).
+        """
+        while True:
+            try:
+                queue.put_nowait(item)
+                return True
+            except asyncio.QueueFull:
+                evicted = self._evict_expendable(queue)
+                if evicted is None:
+                    return False
+                self._account_dropped_item(evicted)
 
     def enqueue_from_thread(self, record: LogRecord) -> None:
         """
@@ -1089,6 +1243,13 @@ class AsyncLoggerManager:
         if queue is None:  # pragma: no cover - _ensure_consumer creates it
             return
         item: _QueueItem = (logger, record, None)
+        if self.drop_policy is not None:
+            if self._shed_arriving(queue, record):
+                self._drop(logger)
+                return
+            if self._try_put_evicting(queue, item):
+                return
+            # no expendable victims: fall through to the sync fallback
         try:
             queue.put_nowait(item)
         except asyncio.QueueFull:

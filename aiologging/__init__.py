@@ -49,6 +49,7 @@ from .logger import (
     AsyncLogger,
     AsyncLoggerManager,
     DeliveryMode,
+    LevelAwareDrop,
     OverflowPolicy,
     _logger_manager,
     critical,
@@ -80,6 +81,7 @@ from .types import (
     AuthDataType,
     AuthenticatorProtocol,
     BatchConfig,
+    DropPolicyProtocol,
     ErrorHandler,
     FileConfig,
     FilterProtocol,
@@ -123,7 +125,7 @@ DEBUG = logging.DEBUG
 NOTSET = logging.NOTSET
 
 # Version information
-__version__ = "0.2.6"
+__version__ = "0.2.7"
 __author__ = "Evgenii Dementev (m6mok)"
 __license__ = "MIT"
 
@@ -155,6 +157,8 @@ __all__ = [
     # Delivery/overflow types
     "DeliveryMode",
     "OverflowPolicy",
+    "LevelAwareDrop",
+    "DropPolicyProtocol",
     # Convenience factories
     "create_stream_handler",
     "create_file_handler",
@@ -363,6 +367,7 @@ def basicConfig(
     queue_size: Optional[int] = None,
     overflow: Optional[OverflowPolicy] = None,
     delivery: Optional[DeliveryMode] = None,
+    drop_policy: Optional[DropPolicyProtocol] = None,
     capture_stdlib: Optional[bool] = None,
     inline_level: Optional[int] = None,
     atexit_flush: Optional[float] = None,
@@ -388,6 +393,11 @@ def basicConfig(
         delivery: Default guarantee of ``await logger.info(...)``:
             "enqueue" (default) resolves once the record is queued,
             "await" resolves after handlers processed it
+        drop_policy: Opt-in queue drop policy, e.g.
+            ``LevelAwareDrop()`` — under pressure low-severity
+            records are sacrificed before high-severity ones; None
+            leaves the current policy unchanged (pure FIFO overflow
+            by default)
         capture_stdlib: True routes stdlib logging records through
             aiologging handlers (see :func:`captureStdlib`)
         inline_level: With ``capture_stdlib``, minimum level at which
@@ -405,6 +415,8 @@ def basicConfig(
         manager.overflow = overflow
     if delivery is not None:
         manager.delivery = delivery
+    if drop_policy is not None:
+        manager.drop_policy = drop_policy
 
     root = manager.root
     if force:

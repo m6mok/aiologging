@@ -155,6 +155,44 @@ class FormatterProtocol(Protocol):
 
 
 @runtime_checkable
+class DropPolicyProtocol(Protocol):
+    """
+    Protocol for queue drop policies (see ``LevelAwareDrop``).
+
+    A drop policy decides which records may be sacrificed when a
+    queue is under pressure: ``should_discard_arriving`` sheds an
+    incoming record outright, ``is_expendable`` marks queued records
+    that may be evicted to make room for an arriving one. It applies
+    to the main record queue and the per-handler dispatch queues.
+
+    Methods:
+        is_expendable: Signal that a queued record may be evicted
+        should_discard_arriving: Signal that an arriving record
+            should be discarded
+
+    Example:
+        >>> class DropDebugWhenFull:
+        ...     def is_expendable(self, record):
+        ...         return record.levelno < logging.INFO
+        ...
+        ...     def should_discard_arriving(self, record, qsize,
+        ...                                 capacity):
+        ...         return self.is_expendable(record) \\
+        ...             and qsize >= capacity
+    """
+
+    def is_expendable(self, record: LogRecord) -> bool:
+        """Signal that a queued record may be evicted when full."""
+        ...
+
+    def should_discard_arriving(
+        self, record: LogRecord, qsize: int, capacity: int
+    ) -> bool:
+        """Signal that an arriving record should be discarded."""
+        ...
+
+
+@runtime_checkable
 class FilterProtocol(Protocol):
     """
     Protocol for log filters.

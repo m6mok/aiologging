@@ -60,6 +60,18 @@ Key pieces, all in `aiologging/logger.py`:
   per-handler dispatch queues (each bounded by `queue_size`), so
   with `"block"` a full dispatch queue suspends the consumer and
   backpressure propagates to the main queue and the producers.
+- **Drop policy (opt-in)** — `manager.drop_policy` /
+  `basicConfig(drop_policy=LevelAwareDrop(...))` makes overflow
+  level-aware, mirroring rsyslog `discardSeverity` and logback
+  `discardingThreshold` (both opt-in there too): above the
+  `watermark` fill ratio arriving records below `discard_below` are
+  shed; on a full queue the oldest expendable queued record is
+  evicted to make room (reaching into the queue's deque, with
+  `task_done()` keeping `join()` consistent); with no expendable
+  victims the configured overflow policy applies unchanged. Applies
+  to the main queue and the dispatch queues; any object implementing
+  `DropPolicyProtocol` (`is_expendable`,
+  `should_discard_arriving`) can replace the level rule.
 - **`_IN_CONSUMER` ContextVar** — set inside the consumer task so the
   stdlib bridge can drop records emitted *by handler I/O libraries
   themselves* (e.g. aiohttp logging during an HTTP flush), preventing

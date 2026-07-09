@@ -101,6 +101,19 @@ audit.delivery = "await"
 - `overflow="block"` (default): when the queue is full, `await logger.info(...)` waits for free space — no records are lost.
 - `overflow="drop_new"` / `"drop_old"`: the call never waits; the incoming or the oldest record is discarded and counted in metrics.
 
+Overflow treats all records alike, so a burst of DEBUG/INFO can push an ERROR out of a full queue. The opt-in `LevelAwareDrop` policy sacrifices low-severity records instead (mirroring rsyslog `discardSeverity` / logback `discardingThreshold`, both opt-in there too):
+
+```python
+aiologging.basicConfig(
+    drop_policy=aiologging.LevelAwareDrop(
+        discard_below=logging.WARNING,  # DEBUG/INFO are expendable
+        watermark=0.8,  # act only when the queue is 80%+ full
+    ),
+)
+```
+
+Above the `watermark` fill ratio, arriving records below `discard_below` are discarded; on a completely full queue the oldest expendable queued record is evicted to make room for the arriving one; with no expendable victims the configured overflow policy applies unchanged. The policy covers the main queue and the per-handler dispatch queues; any object implementing `DropPolicyProtocol` can replace the level rule.
+
 ### Capturing stdlib logging
 
 Third-party libraries log via the standard `logging` module. Route their records through your async handlers:
@@ -134,6 +147,7 @@ Complete runnable examples live in the [examples/](examples/) directory:
 - [examples/config_usage.py](examples/config_usage.py) — configuring loggers from a dictionary
 - [examples/emergency_flush.py](examples/emergency_flush.py) — delivery at process death: `shutdown(timeout=...)`, `flush_sync`, the automatic atexit drain
 - [examples/inline_alerts.py](examples/inline_alerts.py) — inline (synchronous) Telegram delivery of critical bridged records via `captureStdlib(inline_level=...)`
+- [examples/drop_policy.py](examples/drop_policy.py) — level-aware overflow with `LevelAwareDrop`: errors survive queue pressure at the cost of excess INFO context
 
 ## Handlers
 
@@ -474,7 +488,7 @@ Sync (identical to `logging.Logger`):
 ### Module Functions
 
 - `getLogger(name=None)` — hierarchical loggers; no name returns the root logger
-- `basicConfig(level, format, datefmt, handlers, force, queue_size, overflow, delivery, capture_stdlib, inline_level, atexit_flush)`
+- `basicConfig(level, format, datefmt, handlers, force, queue_size, overflow, delivery, drop_policy, capture_stdlib, inline_level, atexit_flush)`
 - `await flush(timeout=None)` — wait until every queued record has been handled
 - `await shutdown(timeout=None)` — drain the queue and close all handlers
 - `flush_sync(timeout=5.0)` — synchronous emergency drain without a running loop; returns `True` when fully delivered
