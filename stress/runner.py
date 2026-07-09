@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import tempfile
+import threading
 import time
 import traceback
 from dataclasses import dataclass, field
@@ -186,6 +187,35 @@ async def ctx_call_async(item: Scenario, ctx: Context) -> None:
     await result
 
 
+def _drive_sync(item: Scenario, ctx: Context) -> None:
+    """
+    Run a sync scenario in a daemon thread so its timeout holds.
+
+    Sync scenarios exercise exactly the paths that can wedge the
+    whole process (``flush_sync``, loop churn), so they must not run
+    on the runner's thread. On timeout the thread is abandoned (it
+    cannot be killed) but, being a daemon, it will not keep the
+    process alive.
+    """
+    failure: List[BaseException] = []
+
+    def target() -> None:
+        try:
+            item.fn(ctx)
+        except BaseException as exc:  # noqa: BLE001 - re-raised below
+            failure.append(exc)
+
+    thread = threading.Thread(
+        target=target, name=f"stress-{item.name}", daemon=True
+    )
+    thread.start()
+    thread.join(timeout=item.timeout)
+    if thread.is_alive():
+        raise asyncio.TimeoutError
+    if failure:
+        raise failure[0]
+
+
 def _run_one(item: Scenario, quick: bool) -> ScenarioResult:
     result = ScenarioResult(name=item.name, category=item.category)
     started = time.perf_counter()
@@ -199,7 +229,7 @@ def _run_one(item: Scenario, quick: bool) -> ScenarioResult:
                 # (loop churn is exactly what they stress); clean up
                 # their managers on a dedicated loop afterwards.
                 try:
-                    item.fn(ctx)
+                    _drive_sync(item, ctx)
                 finally:
                     loop = asyncio.new_event_loop()
                     try:

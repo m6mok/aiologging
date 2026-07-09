@@ -8,6 +8,10 @@ tests, it never touches the network — HTTP scenarios run against
 `httpx.MockTransport`, file scenarios write to a per-scenario
 temporary directory.
 
+CI runs the scaled-down smoke run (`--quick`, ~10 s) as a required
+invariant gate (the `stress` job in `ci.yml`). The full `make stress`
+run takes minutes and is on-demand only — do not add it to CI.
+
 ## Running
 
 ```bash
@@ -83,7 +87,9 @@ dropped, lost or duplicated.
    and import it from `stress/scenarios/__init__.py`).
 2. Register with `@scenario("category.name", timeout=...)`. The
    function takes a `Context`; make it a coroutine unless it must
-   manage event loops itself (then a plain function).
+   manage event loops itself (then a plain function — the runner
+   executes those in a daemon thread so the timeout holds even if
+   the scenario wedges).
 3. Scale the workload with `ctx.n(full, quick)` so `--quick` stays
    fast; create managers only via `ctx.new_manager(...)` (the runner
    shuts them down); report numbers via `ctx.metrics[...]` and
