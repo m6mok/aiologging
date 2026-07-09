@@ -86,6 +86,71 @@ async def task_hygiene(ctx: Context) -> None:
     )
 
 
+@scenario("soak.timed_rotation_churn", timeout=300.0)
+async def timed_rotation_churn(ctx: Context) -> None:
+    """Per-second timed rotation under a continuous paced stream."""
+    try:
+        import aiofiles  # noqa: F401
+    except ImportError:
+        raise Skip("aiofiles not installed")
+    from aiologging.handlers.rotating import (
+        AsyncTimedRotatingFileHandler,
+    )
+
+    errors = []
+
+    async def error_handler(record: object, error: Exception) -> None:
+        errors.append(error)
+
+    log_path = ctx.tmpdir / "timed.log"
+    # backup_count above any possible rotation count for the run, so
+    # no file is deleted and the line count stays a loss check.
+    handler = AsyncTimedRotatingFileHandler(
+        filename=log_path,
+        when="S",
+        interval=1,
+        backup_count=30,
+        error_handler=error_handler,
+    )
+    manager = ctx.new_manager()
+    logger = ctx.new_logger(manager)
+    logger.addHandler(handler)
+
+    duration_s = float(ctx.n(4, 2))
+    sent = await produce_paced(
+        logger, 0, rate_per_s=1_500, duration_s=duration_s
+    )
+    await manager.flush()
+
+    files = sorted(
+        path.name for path in ctx.tmpdir.glob("timed.log*")
+    )
+    total_lines = sum(
+        path.read_text(encoding="utf-8").count("\n")
+        for path in ctx.tmpdir.glob("timed.log*")
+    )
+    ctx.metrics.update(
+        {
+            "duration_s": duration_s,
+            "records_sent": sent,
+            "handler_errors": len(errors),
+            "files": len(files),
+            "total_lines": total_lines,
+        }
+    )
+    ctx.check("no handler errors", not errors, f"errors={len(errors)}")
+    ctx.check(
+        "rotation actually happened",
+        len(files) > 1,
+        f"files={len(files)}",
+    )
+    ctx.check(
+        "no record lost across rotations",
+        total_lines == sent,
+        f"lines={total_lines} sent={sent}",
+    )
+
+
 @scenario("soak.rotation_churn", timeout=300.0)
 async def rotation_churn(ctx: Context) -> None:
     """Size-based rotation under a continuous stream of records."""

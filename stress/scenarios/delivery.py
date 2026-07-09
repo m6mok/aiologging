@@ -904,6 +904,200 @@ async def drop_policy_bridge_threads(ctx: Context) -> None:
 
 
 # ----------------------------------------------------------------------
+# Delivery mode "await" under faults: the contract is that the
+# coroutine resolves only after every handler has processed (or
+# accountably dropped) the record — and that it always resolves.
+# ----------------------------------------------------------------------
+
+
+@scenario("delivery.await_faulty_sink")
+async def await_faulty_sink(ctx: Context) -> None:
+    """await mode: resolution implies delivery, even through retries."""
+    manager = ctx.new_manager(delivery="await")
+    flaky = CollectorHandler(fail_every=3, track=True)
+    healthy = CollectorHandler(track=True)
+    logger = ctx.new_logger(manager)
+    logger.addHandler(flaky)
+    logger.addHandler(healthy)
+
+    producers = 3
+    count_each = ctx.n(800, 150)
+    violations = 0
+
+    async def producer(worker: int) -> None:
+        nonlocal violations
+        for seq in range(count_each):
+            await logger.info(
+                "await %d",
+                seq,
+                extra={"seq": seq, "producer": worker},
+            )
+            # The await contract: by the time the call resolves the
+            # record must already be in every sink.
+            if (
+                flaky.max_seq(worker) < seq
+                or healthy.max_seq(worker) < seq
+            ):
+                violations += 1
+
+    started = time.perf_counter()
+    await asyncio.gather(
+        *(producer(worker) for worker in range(producers))
+    )
+    elapsed = time.perf_counter() - started
+    sent = producers * count_each
+
+    dropped = int(manager.get_metrics()["records_dropped"])
+    ctx.metrics.update(
+        {
+            "records_sent": sent,
+            "rate_per_s": int(sent / elapsed),
+            "injected_failures": flaky.injected_failures,
+            "await_contract_violations": violations,
+        }
+    )
+    ctx.check(
+        "failures were actually injected", flaky.injected_failures > 0
+    )
+    ctx.check(
+        "await resolution implies delivery to every sink",
+        violations == 0,
+        f"violations={violations}",
+    )
+    ctx.check(
+        "flaky sink recovered every record",
+        flaky.received == sent,
+        f"received={flaky.received} sent={sent}",
+    )
+    ctx.check(
+        "healthy sink got every record",
+        healthy.received == sent,
+        f"received={healthy.received} sent={sent}",
+    )
+    ctx.check("nothing dropped", dropped == 0)
+    ctx.check(
+        "retries kept per-producer ordering",
+        flaky.ordered_per_producer(),
+    )
+
+
+@scenario("delivery.await_overflow")
+async def await_overflow(ctx: Context) -> None:
+    """await mode: every await resolves even when records are shed."""
+    for policy in ("drop_new", "drop_old"):
+        manager = ctx.new_manager(
+            queue_size=10, overflow=policy, delivery="await"
+        )
+        sink = CollectorHandler(delay=_SLOW, track=True)
+        logger = ctx.new_logger(manager)
+        logger.addHandler(sink)
+
+        producers = ctx.n(40, 16)
+        count_each = ctx.n(150, 40)
+        started = time.perf_counter()
+        sent = await produce_many(logger, producers, count_each)
+        wall_s = time.perf_counter() - started
+        await manager.flush()
+
+        dropped = int(manager.get_metrics()["records_dropped"])
+        ctx.metrics.update(
+            {
+                f"{policy}_records_sent": sent,
+                f"{policy}_records_delivered": sink.received,
+                f"{policy}_records_dropped": dropped,
+                f"{policy}_producer_wall_s": round(wall_s, 3),
+            }
+        )
+        # Reaching this line at all means every await resolved —
+        # a stuck future would hang the scenario into its timeout.
+        ctx.check(
+            f"{policy}: the queue really overflowed",
+            dropped > 0,
+            f"dropped={dropped}",
+        )
+        ctx.check(
+            f"{policy}: accounting balances",
+            sent == sink.received + dropped,
+            f"sent={sent} delivered={sink.received} dropped={dropped}",
+        )
+        ctx.check(
+            f"{policy}: delivered records stay ordered",
+            sink.ordered_per_producer(),
+        )
+
+
+@scenario("delivery.await_cancelled_callers")
+async def await_cancelled_callers(ctx: Context) -> None:
+    """await mode: cancelling waiting callers loses nothing."""
+    manager = ctx.new_manager(delivery="await")
+    sink = CollectorHandler(delay=0.002, track=True)
+    logger = ctx.new_logger(manager)
+    logger.addHandler(sink)
+
+    count = ctx.n(300, 60)
+    cancelled = 0
+    loop = asyncio.get_running_loop()
+    for seq in range(count):
+        task = loop.create_task(
+            logger.info(
+                "cancel %d", seq, extra={"seq": seq, "producer": 0}
+            )
+        )
+        # One tick: the task runs up to its `await fut` suspension
+        # (the record is already on the queue), then gets cancelled.
+        await asyncio.sleep(0)
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            cancelled += 1
+    await manager.flush()
+
+    delivered_seqs = list(sink.by_producer.get(0, []))
+    missing = set(range(count)) - set(delivered_seqs)
+    duplicates = len(delivered_seqs) - len(set(delivered_seqs))
+    dropped = int(manager.get_metrics()["records_dropped"])
+
+    # The consumer must still be alive and functional afterwards
+    await logger.info(
+        "post-cancel", extra={"seq": count, "producer": 0}
+    )
+    await manager.flush()
+    survivor_delivered = sink.max_seq(0) == count
+
+    ctx.metrics.update(
+        {
+            "records_sent": count,
+            "callers_cancelled": cancelled,
+            "records_delivered": len(delivered_seqs),
+            "duplicates": duplicates,
+            "records_dropped": dropped,
+        }
+    )
+    ctx.check(
+        "callers were actually cancelled mid-await",
+        cancelled > 0,
+        f"cancelled={cancelled}/{count}",
+    )
+    ctx.check(
+        "no record lost to a cancelled caller",
+        not missing,
+        f"missing={len(missing)}",
+    )
+    ctx.check(
+        "no record duplicated",
+        duplicates == 0,
+        f"duplicates={duplicates}",
+    )
+    ctx.check("nothing counted as dropped", dropped == 0)
+    ctx.check(
+        "the pipeline still works after the cancellations",
+        survivor_delivered,
+    )
+
+
+# ----------------------------------------------------------------------
 # D1: atexit drain (subprocess — the hook only runs at interpreter
 # exit, so it cannot be exercised in-process)
 # ----------------------------------------------------------------------
