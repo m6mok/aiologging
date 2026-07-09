@@ -170,7 +170,7 @@ class AsyncStreamHandler(AsyncHandler):
 
         if hasattr(self.stream, "close"):
             try:
-                if asyncio.iscoroutinefunction(self.stream.close):
+                if inspect.iscoroutinefunction(self.stream.close):
                     await self.stream.close()
                 else:
                     # For sync close, run in thread pool

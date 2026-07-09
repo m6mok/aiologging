@@ -519,6 +519,12 @@ MIT License - see LICENSE file for details.
 
 ## Changelog
 
+### 0.1.1
+
+- Python 3.13 and 3.14 support
+- Replace deprecated `asyncio.iscoroutinefunction` with `inspect.iscoroutinefunction`
+- Remove dead Python 3.8 compatibility branches
+
 ### 0.1.0
 
 - Initial release

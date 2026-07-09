@@ -279,17 +279,10 @@ class AsyncHandlerABC(ABC):
         ...
 
 # More specific factory types with better type safety
-if sys.version_info >= (3, 9):
-    HandlerFactory = Callable[..., Awaitable[HandlerType]]
-    LoggerFactory = Callable[..., LoggerType]
-    FormatterFactory = Callable[..., FormatterType]
-    FilterFactory = Callable[..., FilterType]
-else:
-    # For Python 3.8 compatibility - use simple Callable without type parameters
-    HandlerFactory = Callable
-    LoggerFactory = Callable
-    FormatterFactory = Callable
-    FilterFactory = Callable
+HandlerFactory = Callable[..., Awaitable[HandlerType]]
+LoggerFactory = Callable[..., LoggerType]
+FormatterFactory = Callable[..., FormatterType]
+FilterFactory = Callable[..., FilterType]
 
 # Forward declarations for type checking with better organization
 if TYPE_CHECKING:
@@ -297,21 +290,12 @@ if TYPE_CHECKING:
     from .logger import AsyncLogger
 
 # Enhanced context manager type with generics
-if sys.version_info >= (3, 9):
-    AsyncContextManager = Callable[..., Awaitable[Any]]
-    AsyncContextManagerGeneric = Callable[..., Awaitable[T]]
-    LoopGetter = Callable[[], Optional[AbstractEventLoop]]
-    ConfigValidator = Callable[[Dict[str, ConfigValue]], bool]
-    RetryStrategy = Callable[[int, Exception], bool]
-    RateLimiter = Callable[[], Awaitable[bool]]
-else:
-    # For Python 3.8 compatibility - use simple Callable without type parameters
-    AsyncContextManager = Callable
-    AsyncContextManagerGeneric = Callable
-    LoopGetter = Callable
-    ConfigValidator = Callable
-    RetryStrategy = Callable
-    RateLimiter = Callable
+AsyncContextManager = Callable[..., Awaitable[Any]]
+AsyncContextManagerGeneric = Callable[..., Awaitable[T]]
+LoopGetter = Callable[[], Optional[AbstractEventLoop]]
+ConfigValidator = Callable[[Dict[str, ConfigValue]], bool]
+RetryStrategy = Callable[[int, Exception], bool]
+RateLimiter = Callable[[], Awaitable[bool]]
 
 # Error handler type with more specific name
 ErrorHandler = AsyncErrorHandler

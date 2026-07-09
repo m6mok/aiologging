@@ -98,7 +98,7 @@ DEBUG = logging.DEBUG
 NOTSET = logging.NOTSET
 
 # Version information
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __author__ = "Evgenii Dementev (m6mok)"
 __license__ = "MIT"
 
