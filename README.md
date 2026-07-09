@@ -30,8 +30,9 @@ pip install aiologging
 # For file handlers
 pip install aiologging[aiofiles]
 
-# For HTTP handlers
+# For HTTP handlers (pick one backend)
 pip install aiologging[aiohttp]
+pip install aiologging[httpx]
 
 # For Protobuf support
 pip install aiologging[protobuf]
@@ -175,7 +176,7 @@ async def main():
     await aiologging.shutdown()
 ```
 
-### HTTP Handler (requires aiohttp)
+### HTTP Handler (requires aiohttp or httpx)
 
 ```python
 import aiologging
@@ -189,6 +190,17 @@ async def main():
 
     await logger.info("This will be sent via HTTP")
     await aiologging.shutdown()
+```
+
+HTTP handlers work on top of either `aiohttp` or `httpx`. By default
+aiohttp is used when installed, with a fallback to httpx. The backend
+can also be selected explicitly:
+
+```python
+http_handler = aiologging.AsyncHttpHandler(
+    "https://api.example.com/logs",
+    backend="httpx",  # or "aiohttp"
+)
 ```
 
 ### Custom Authentication
@@ -425,10 +437,10 @@ Sync (identical to `logging.Logger`):
 - `AsyncFileHandler` - File output handler (requires aiofiles)
 - `AsyncRotatingFileHandler` - Size-based rotation (requires aiofiles)
 - `AsyncTimedRotatingFileHandler` - Time-based rotation (requires aiofiles)
-- `AsyncHttpHandler` - Universal HTTP handler (requires aiohttp)
-- `AsyncHttpTextHandler` - Plain text HTTP handler (requires aiohttp)
-- `AsyncHttpJsonHandler` - JSON HTTP handler (requires aiohttp)
-- `AsyncHttpProtoHandler` - Protobuf HTTP handler (requires aiohttp, protobuf)
+- `AsyncHttpHandler` - Universal HTTP handler (requires aiohttp or httpx)
+- `AsyncHttpTextHandler` - Plain text HTTP handler (requires aiohttp or httpx)
+- `AsyncHttpJsonHandler` - JSON HTTP handler (requires aiohttp or httpx)
+- `AsyncHttpProtoHandler` - Protobuf HTTP handler (requires aiohttp or httpx, plus protobuf)
 - `StdlibBridgeHandler` - Sync `logging.Handler` forwarding records into aiologging
 
 ### Configuration Classes

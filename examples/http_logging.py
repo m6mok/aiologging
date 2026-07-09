@@ -5,6 +5,9 @@ Starts a tiny local aiohttp server that plays the role of a log
 collector, then sends log records to it as JSON batches with a custom
 authenticator.
 
+The HTTP handlers can also run on top of ``httpx`` instead of aiohttp:
+install the ``httpx`` extra and pass ``backend="httpx"`` to the handler.
+
 Run:
     pip install aiologging[aiohttp]
     python examples/http_logging.py

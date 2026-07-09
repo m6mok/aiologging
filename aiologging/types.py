@@ -103,7 +103,7 @@ class AuthenticatorProtocol(Protocol[RequestType, ResponseType]):
 
     async def __call__(
         self,
-        session: "ClientSession",
+        session: "HttpClientType",
         request_data: RequestType,
     ) -> ResponseType:
         """Authenticate the request using the session and request data."""
@@ -200,6 +200,13 @@ HttpContentType: TypeAlias = Literal[
     "application/xml",
     "text/xml",
 ]
+
+# Supported async HTTP client backends
+HttpBackendType: TypeAlias = Literal["aiohttp", "httpx"]
+
+# Async HTTP client instance: aiohttp.ClientSession or httpx.AsyncClient,
+# depending on the selected backend
+HttpClientType: TypeAlias = Union["ClientSession", "AsyncClient"]
 
 # File rotation types with more options
 RotationType: TypeAlias = Literal["time", "size", "both"]
@@ -300,9 +307,10 @@ RateLimiter = Callable[[], Awaitable[bool]]
 # Error handler type with more specific name
 ErrorHandler = AsyncErrorHandler
 
-# Type for HTTP session (forward reference)
+# Types for HTTP clients (forward references)
 if TYPE_CHECKING:
     from aiohttp import ClientSession
+    from httpx import AsyncClient
 
 # Configuration types
 class HandlerConfig(Generic[T]):
@@ -465,6 +473,7 @@ class HttpConfig:
         timeout: The request timeout in seconds
         verify_ssl: Whether to verify SSL certificates
         batch_config: Configuration for batch processing
+        backend: HTTP client backend to use ('aiohttp' or 'httpx')
 
     Example:
         >>> config = HttpConfig(
@@ -485,6 +494,7 @@ class HttpConfig:
         timeout: float = 30.0,
         verify_ssl: bool = True,
         batch_config: Optional[BatchConfig] = None,
+        backend: Optional[HttpBackendType] = None,
     ) -> None:
         """
         Initialize the HTTP configuration.
@@ -497,6 +507,8 @@ class HttpConfig:
             timeout: The request timeout in seconds
             verify_ssl: Whether to verify SSL certificates
             batch_config: Configuration for batch processing
+            backend: HTTP client backend to use ('aiohttp' or 'httpx');
+                     None selects automatically
         """
         self.url = url
         self.method = method.upper()
@@ -505,6 +517,7 @@ class HttpConfig:
         self.timeout = timeout
         self.verify_ssl = verify_ssl
         self.batch_config = batch_config or BatchConfig()
+        self.backend = backend
 
 # File configuration
 class FileConfig:

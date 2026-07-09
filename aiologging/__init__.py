@@ -84,6 +84,7 @@ from .types import (
     FormatterProtocol,
     HandlerConfig,
     HeadersType,
+    HttpBackendType,
     HttpConfig,
     HttpContentType,
     LoggerConfig,
@@ -119,7 +120,7 @@ DEBUG = logging.DEBUG
 NOTSET = logging.NOTSET
 
 # Version information
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __author__ = "Evgenii Dementev (m6mok)"
 __license__ = "MIT"
 
@@ -197,6 +198,7 @@ __all__ = [
     "FormatterProtocol",
     "HandlerConfig",
     "HeadersType",
+    "HttpBackendType",
     "HttpConfig",
     "HttpContentType",
     "LoggerConfig",
@@ -273,6 +275,7 @@ def create_http_handler(
     level: int = NOTSET,
     formatter: Optional[FormatterProtocol] = None,
     authenticator: Optional[AuthenticatorProtocol[Any, Any]] = None,
+    backend: Optional[HttpBackendType] = None,
 ) -> AsyncHttpHandler:
     """
     Create an async HTTP handler.
@@ -284,12 +287,15 @@ def create_http_handler(
         level: The logging level for this handler
         formatter: The formatter to use for log records
         authenticator: Optional authentication function
+        backend: HTTP client backend to use ('aiohttp' or 'httpx');
+                 if None, aiohttp is used when installed,
+                 falling back to httpx
 
     Returns:
         An AsyncHttpHandler instance
 
     Raises:
-        DependencyError: If aiohttp is not installed
+        DependencyError: If neither aiohttp nor httpx is installed
     """
     return AsyncHttpHandler(
         url,
@@ -298,6 +304,7 @@ def create_http_handler(
         level=level,
         formatter=formatter,
         authenticator=authenticator,
+        backend=backend,
     )
 
 

@@ -13,7 +13,12 @@ from abc import abstractmethod
 from logging import LogRecord, NOTSET
 from typing import Any, Dict, List, Optional, Union
 
-from ..exceptions import AuthenticationError, DependencyError, NetworkError
+from ..exceptions import (
+    AuthenticationError,
+    ConfigurationError,
+    DependencyError,
+    NetworkError,
+)
 from ..types import (
     AuthenticatorProtocol,
     BatchConfig,
@@ -21,6 +26,7 @@ from ..types import (
     FilterProtocol,
     FormatterProtocol,
     HeadersType,
+    HttpBackendType,
     HttpContentType,
     ParamsType,
 )
@@ -36,6 +42,14 @@ try:
 except ImportError:
     AIOHTTP_AVAILABLE = False
 
+# Try to import httpx
+try:
+    import httpx
+
+    HTTPX_AVAILABLE = True
+except ImportError:
+    HTTPX_AVAILABLE = False
+
 # Try to import protobuf
 try:
     from google.protobuf import message
@@ -50,11 +64,85 @@ def _check_aiohttp() -> None:
     """Check if aiohttp is available."""
     if not AIOHTTP_AVAILABLE:
         raise DependencyError(
-            "aiohttp is required for HTTP handlers. "
+            "aiohttp is required for the 'aiohttp' HTTP backend. "
             "Install it with: pip install aiologging[aiohttp]",
             dependency_name="aiohttp",
             install_command="pip install aiologging[aiohttp]",
         )
+
+
+def _check_httpx() -> None:
+    """Check if httpx is available."""
+    if not HTTPX_AVAILABLE:
+        raise DependencyError(
+            "httpx is required for the 'httpx' HTTP backend. "
+            "Install it with: pip install aiologging[httpx]",
+            dependency_name="httpx",
+            install_command="pip install aiologging[httpx]",
+        )
+
+
+def _resolve_backend(backend: Optional[HttpBackendType]) -> HttpBackendType:
+    """
+    Resolve the HTTP client backend to use.
+
+    Args:
+        backend: The explicitly requested backend, or None for
+                 auto-detection (aiohttp is preferred when both
+                 libraries are installed)
+
+    Returns:
+        The resolved backend name
+
+    Raises:
+        DependencyError: If the requested backend (or, with
+                         auto-detection, any backend) is not installed
+        ConfigurationError: If an unknown backend name is given
+    """
+    if backend is None:
+        if AIOHTTP_AVAILABLE:
+            return "aiohttp"
+        if HTTPX_AVAILABLE:
+            return "httpx"
+        raise DependencyError(
+            "An async HTTP client is required for HTTP handlers. "
+            "Install one with: pip install aiologging[aiohttp] "
+            "or pip install aiologging[httpx]",
+            dependency_name="aiohttp|httpx",
+            install_command="pip install aiologging[aiohttp]",
+        )
+    if backend == "aiohttp":
+        _check_aiohttp()
+        return backend
+    if backend == "httpx":
+        _check_httpx()
+        return backend
+    raise ConfigurationError(
+        f"Unknown HTTP backend: {backend!r}. "
+        "Supported backends: 'aiohttp', 'httpx'",
+        config_key="backend",
+        config_value=backend,
+    )
+
+
+class _HttpxResponseAdapter:
+    """
+    Adapts an httpx.Response to the aiohttp-style response interface
+    used internally by the HTTP handlers (``status`` attribute and
+    async ``text()`` method).
+    """
+
+    def __init__(self, response: "httpx.Response") -> None:
+        self._response = response
+
+    @property
+    def status(self) -> int:
+        """HTTP status code of the response."""
+        return self._response.status_code
+
+    async def text(self) -> str:
+        """Response body decoded as text."""
+        return self._response.text
 
 
 def _check_protobuf() -> None:
@@ -90,6 +178,7 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
         filters: Optional[List[FilterProtocol]] = None,
         error_handler: Optional[ErrorHandler] = None,
         batch_config: Optional[BatchConfig] = None,
+        backend: Optional[HttpBackendType] = None,
     ) -> None:
         """
         Initialize the async HTTP handler.
@@ -107,11 +196,14 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
             filters: List of filters to apply to log records
             error_handler: Optional error handler for exceptions
             batch_config: Configuration for batch processing
+            backend: HTTP client backend to use ('aiohttp' or 'httpx');
+                     if None, aiohttp is used when installed,
+                     falling back to httpx
 
         Raises:
-            DependencyError: If aiohttp is not installed
+            DependencyError: If the selected HTTP client is not installed
         """
-        _check_aiohttp()
+        resolved_backend = _resolve_backend(backend)
 
         super().__init__(
             level=level,
@@ -133,27 +225,46 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
         self.verify_ssl = verify_ssl
         self.authenticator = authenticator or self._default_authenticator
         self.batch_config = batch_config or BatchConfig()
-        self._session: Optional[ClientSession] = None
+        self.backend: HttpBackendType = resolved_backend
+        # aiohttp.ClientSession or httpx.AsyncClient, per self.backend
+        self._session: Optional[Any] = None
         self._session_lock = LazyLock()
 
-    async def _get_session(self) -> ClientSession:
-        """Get or create an aiohttp session."""
-        if self._session is None or self._session.closed:
+    def _session_is_closed(self) -> bool:
+        """Check whether the underlying HTTP client is missing or closed."""
+        if self._session is None:
+            return True
+        if self.backend == "aiohttp":
+            return bool(self._session.closed)
+        return bool(self._session.is_closed)
+
+    def _create_session(self) -> Any:
+        """Create a new HTTP client for the configured backend."""
+        if self.backend == "aiohttp":
+            timeout = ClientTimeout(total=self.timeout)
+            connector = aiohttp.TCPConnector(
+                ssl=self.verify_ssl,
+            )
+            return ClientSession(
+                timeout=timeout,
+                connector=connector,
+            )
+        return httpx.AsyncClient(
+            timeout=self.timeout,
+            verify=self.verify_ssl,
+        )
+
+    async def _get_session(self) -> Any:
+        """Get or create the HTTP client for the configured backend."""
+        if self._session_is_closed():
             async with self._session_lock:
-                if self._session is None or self._session.closed:
-                    timeout = ClientTimeout(total=self.timeout)
-                    connector = aiohttp.TCPConnector(
-                        ssl=self.verify_ssl,
-                    )
-                    self._session = ClientSession(
-                        timeout=timeout,
-                        connector=connector,
-                    )
+                if self._session_is_closed():
+                    self._session = self._create_session()
         return self._session
 
     async def _default_authenticator(
         self,
-        session: ClientSession,
+        session: Any,
         request_data: Any,
     ) -> Dict[str, str]:
         """
@@ -163,7 +274,8 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
         default authentication behavior.
 
         Args:
-            session: The aiohttp session
+            session: The HTTP client (aiohttp.ClientSession
+                     or httpx.AsyncClient)
             request_data: The data to be sent
 
         Returns:
@@ -173,14 +285,15 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
 
     async def _authenticate_request(
         self,
-        session: ClientSession,
+        session: Any,
         request_data: Any,
     ) -> Dict[str, str]:
         """
         Authenticate the request using the configured authenticator.
 
         Args:
-            session: The aiohttp session
+            session: The HTTP client (aiohttp.ClientSession
+                     or httpx.AsyncClient)
             request_data: The data to be sent
 
         Returns:
@@ -278,7 +391,7 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
 
     async def _make_request_with_retries(
         self,
-        session: ClientSession,
+        session: Any,
         headers: HeadersType,
         request_data: Any,
         records: List[LogRecord],
@@ -287,7 +400,8 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
         Make HTTP request with retry logic.
 
         Args:
-            session: The aiohttp session
+            session: The HTTP client (aiohttp.ClientSession
+                     or httpx.AsyncClient)
             headers: Request headers
             request_data: The data to send
             records: The original log records (for error reporting)
@@ -343,7 +457,7 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
 
     async def _make_single_request(
         self,
-        session: ClientSession,
+        session: Any,
         headers: HeadersType,
         request_data: Any,
     ) -> Any:
@@ -351,34 +465,49 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
         Make a single HTTP request.
 
         Args:
-            session: The aiohttp session
+            session: The HTTP client (aiohttp.ClientSession
+                     or httpx.AsyncClient)
             headers: Request headers
             request_data: The data to send
 
         Returns:
-            The HTTP response object
+            The HTTP response object with a ``status`` attribute
+            and an async ``text()`` method
         """
-        return await session.request(
-            method=self.method,
-            url=self.url,
-            headers=headers,
-            json=(
-                request_data
-                if isinstance(request_data, (dict, list))
-                else None
-            ),
-            data=(
-                request_data
-                if not isinstance(request_data, (dict, list))
-                else None
-            ),
-            params=self.params,
+        json_data = (
+            request_data if isinstance(request_data, (dict, list)) else None
+        )
+        raw_data = (
+            request_data if not isinstance(request_data, (dict, list)) else None
         )
 
+        if self.backend == "aiohttp":
+            return await session.request(
+                method=self.method,
+                url=self.url,
+                headers=headers,
+                json=json_data,
+                data=raw_data,
+                params=self.params,
+            )
+
+        response = await session.request(
+            method=self.method,
+            url=self.url,
+            headers=dict(headers),
+            json=json_data,
+            content=raw_data,
+            params=self.params,
+        )
+        return _HttpxResponseAdapter(response)
+
     async def _close_resources(self) -> None:
-        """Close the aiohttp session."""
-        if self._session and not self._session.closed:
-            await self._session.close()
+        """Close the underlying HTTP client."""
+        if self._session is not None and not self._session_is_closed():
+            if self.backend == "aiohttp":
+                await self._session.close()
+            else:
+                await self._session.aclose()
 
     def __repr__(self) -> str:
         """Return a string representation of the handler."""
@@ -387,8 +516,8 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
             formatter = type(self.formatter).__name__
         return (
             f"{self.__class__.__name__}(url='{self.url}', "
-            f"method='{self.method}', level={self.level}, "
-            f"formatter={formatter})"
+            f"method='{self.method}', backend='{self.backend}', "
+            f"level={self.level}, formatter={formatter})"
         )
 
 
@@ -517,6 +646,7 @@ class AsyncHttpProtoHandler(AsyncHttpHandlerBase):
         filters: Optional[List[FilterProtocol]] = None,
         error_handler: Optional[ErrorHandler] = None,
         batch_config: Optional[BatchConfig] = None,
+        backend: Optional[HttpBackendType] = None,
     ) -> None:
         """
         Initialize the async HTTP protobuf handler.
@@ -535,9 +665,11 @@ class AsyncHttpProtoHandler(AsyncHttpHandlerBase):
             filters: List of filters to apply to log records
             error_handler: Optional error handler for exceptions
             batch_config: Configuration for batch processing
+            backend: HTTP client backend to use ('aiohttp' or 'httpx')
 
         Raises:
-            DependencyError: If aiohttp or protobuf is not installed
+            DependencyError: If the HTTP client or protobuf
+                             is not installed
         """
         _check_protobuf()
 
@@ -554,6 +686,7 @@ class AsyncHttpProtoHandler(AsyncHttpHandlerBase):
             filters,
             error_handler,
             batch_config,
+            backend=backend,
         )
 
         self.proto_message_class = proto_message_class
@@ -640,6 +773,7 @@ class AsyncHttpHandler(AsyncHttpHandlerBase):
         filters: Optional[List[FilterProtocol]] = None,
         error_handler: Optional[ErrorHandler] = None,
         batch_config: Optional[BatchConfig] = None,
+        backend: Optional[HttpBackendType] = None,
     ) -> None:
         """
         Initialize the universal async HTTP handler.
@@ -658,9 +792,10 @@ class AsyncHttpHandler(AsyncHttpHandlerBase):
             filters: List of filters to apply to log records
             error_handler: Optional error handler for exceptions
             batch_config: Configuration for batch processing
+            backend: HTTP client backend to use ('aiohttp' or 'httpx');
+                     if None, aiohttp is used when installed,
+                     falling back to httpx
         """
-        _check_aiohttp()
-
         super().__init__(
             url,
             method,
@@ -674,6 +809,7 @@ class AsyncHttpHandler(AsyncHttpHandlerBase):
             filters,
             error_handler,
             batch_config,
+            backend=backend,
         )
 
         self.format_type = format_type
@@ -693,6 +829,7 @@ class AsyncHttpHandler(AsyncHttpHandlerBase):
             filters,
             error_handler,
             batch_config,
+            backend=self.backend,
         )
         self._handlers["application/json"] = AsyncHttpJsonHandler(
             url,
@@ -707,6 +844,7 @@ class AsyncHttpHandler(AsyncHttpHandlerBase):
             filters,
             error_handler,
             batch_config,
+            backend=self.backend,
         )
 
         # Only create proto handler if protobuf is available
@@ -725,6 +863,7 @@ class AsyncHttpHandler(AsyncHttpHandlerBase):
                 filters,
                 error_handler,
                 batch_config,
+                backend=self.backend,
             )
 
     async def emit(self, record: LogRecord) -> None:

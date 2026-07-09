@@ -10,8 +10,19 @@ import sys
 from typing import List
 from unittest.mock import AsyncMock, patch
 
-from aiologging.handlers.http import AsyncHttpHandler, AsyncHttpJsonHandler
-from aiologging.exceptions import NetworkError, AuthenticationError
+import httpx
+
+from aiologging.handlers.http import (
+    AsyncHttpHandler,
+    AsyncHttpJsonHandler,
+    _HttpxResponseAdapter,
+)
+from aiologging.exceptions import (
+    AuthenticationError,
+    ConfigurationError,
+    DependencyError,
+    NetworkError,
+)
 
 
 class TestAsyncHttpHandler:
@@ -316,7 +327,6 @@ class TestAsyncHttpProtoHandler:
     async def test_emit_proto_format_without_protobuf(self) -> None:
         """Test emit with protobuf format when protobuf is not available."""
         from aiologging.handlers.http import AsyncHttpProtoHandler
-        from aiologging.exceptions import DependencyError
 
         with patch("aiologging.handlers.http.PROTOBUF_AVAILABLE", False):
             with pytest.raises(DependencyError, match="protobuf is required"):
@@ -612,6 +622,268 @@ class TestAsyncHttpHandlerAdvanced:
         assert "AsyncHttpHandler" in repr_str
         assert "https://example.com/api/logs" in repr_str
         assert "method='POST'" in repr_str
+
+
+class TestHttpBackendSelection:
+    """Test cases for HTTP client backend selection."""
+
+    def test_default_backend_prefers_aiohttp(self) -> None:
+        """aiohttp is used by default when both backends are installed."""
+        handler = AsyncHttpHandler("https://example.com/api/logs")
+        assert handler.backend == "aiohttp"
+
+    def test_explicit_httpx_backend(self) -> None:
+        """httpx backend can be selected explicitly."""
+        handler = AsyncHttpHandler(
+            "https://example.com/api/logs", backend="httpx"
+        )
+        assert handler.backend == "httpx"
+        assert "backend='httpx'" in repr(handler)
+
+    def test_explicit_aiohttp_backend(self) -> None:
+        """aiohttp backend can be selected explicitly."""
+        handler = AsyncHttpHandler(
+            "https://example.com/api/logs", backend="aiohttp"
+        )
+        assert handler.backend == "aiohttp"
+
+    def test_auto_falls_back_to_httpx(self) -> None:
+        """httpx is used automatically when aiohttp is not installed."""
+        with patch("aiologging.handlers.http.AIOHTTP_AVAILABLE", False):
+            handler = AsyncHttpHandler("https://example.com/api/logs")
+            assert handler.backend == "httpx"
+
+    def test_httpx_backend_missing(self) -> None:
+        """DependencyError is raised when httpx is requested but missing."""
+        with patch("aiologging.handlers.http.HTTPX_AVAILABLE", False):
+            with pytest.raises(DependencyError, match="httpx is required"):
+                AsyncHttpHandler(
+                    "https://example.com/api/logs", backend="httpx"
+                )
+
+    def test_aiohttp_backend_missing(self) -> None:
+        """DependencyError is raised when aiohttp is requested but missing."""
+        with patch("aiologging.handlers.http.AIOHTTP_AVAILABLE", False):
+            with pytest.raises(DependencyError, match="aiohttp is required"):
+                AsyncHttpHandler(
+                    "https://example.com/api/logs", backend="aiohttp"
+                )
+
+    def test_no_backend_installed(self) -> None:
+        """DependencyError mentions both extras when nothing is installed."""
+        with patch("aiologging.handlers.http.AIOHTTP_AVAILABLE", False), \
+                patch("aiologging.handlers.http.HTTPX_AVAILABLE", False):
+            with pytest.raises(DependencyError) as exc_info:
+                AsyncHttpHandler("https://example.com/api/logs")
+            assert "aiologging[aiohttp]" in str(exc_info.value)
+            assert "aiologging[httpx]" in str(exc_info.value)
+
+    def test_unknown_backend(self) -> None:
+        """ConfigurationError is raised for an unknown backend name."""
+        with pytest.raises(ConfigurationError, match="Unknown HTTP backend"):
+            AsyncHttpHandler(
+                "https://example.com/api/logs",
+                backend="requests",  # type: ignore[arg-type]
+            )
+
+    def test_backend_propagates_to_format_handlers(self) -> None:
+        """The universal handler passes its backend to format handlers."""
+        handler = AsyncHttpHandler(
+            "https://example.com/api/logs", backend="httpx"
+        )
+        for sub_handler in handler._handlers.values():
+            assert sub_handler.backend == "httpx"
+
+
+class TestHttpxBackend:
+    """Test cases for the httpx HTTP client backend."""
+
+    def _create_test_record(self, message: str = "Test message") -> logging.LogRecord:
+        """Create a test log record."""
+        return logging.LogRecord(
+            name="test", level=logging.INFO, pathname="", lineno=0,
+            msg=message, args=(), exc_info=None
+        )
+
+    def _make_handler_with_transport(
+        self,
+        handler_class: type,
+        respond: "callable",
+        **handler_kwargs: object,
+    ) -> object:
+        """Create a handler wired to an httpx.MockTransport."""
+        handler = handler_class(
+            "https://example.com/api/logs",
+            backend="httpx",
+            **handler_kwargs,
+        )
+        handler._session = httpx.AsyncClient(
+            transport=httpx.MockTransport(respond)
+        )
+        return handler
+
+    @pytest.mark.asyncio
+    async def test_flush_sends_json_request(self) -> None:
+        """JSON records are delivered through the httpx client."""
+        requests: List[httpx.Request] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200)
+
+        handler = self._make_handler_with_transport(
+            AsyncHttpJsonHandler, respond
+        )
+
+        await handler.flush([self._create_test_record("httpx message")])
+        await handler.close()
+
+        assert len(requests) == 1
+        request = requests[0]
+        assert request.method == "POST"
+        assert str(request.url) == "https://example.com/api/logs"
+        assert request.headers["Content-Type"] == "application/json"
+        payload = json.loads(request.content)
+        assert payload[0]["message"] == "httpx message"
+
+    @pytest.mark.asyncio
+    async def test_flush_sends_text_request(self) -> None:
+        """Plain text records are delivered through the httpx client."""
+        from aiologging.handlers.http import AsyncHttpTextHandler
+
+        requests: List[httpx.Request] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200)
+
+        handler = self._make_handler_with_transport(
+            AsyncHttpTextHandler, respond
+        )
+
+        await handler.flush([
+            self._create_test_record("line 1"),
+            self._create_test_record("line 2"),
+        ])
+        await handler.close()
+
+        assert len(requests) == 1
+        request = requests[0]
+        assert request.headers["Content-Type"] == "text/plain"
+        assert request.content.decode() == "line 1\nline 2"
+
+    @pytest.mark.asyncio
+    async def test_flush_server_error_raises_network_error(self) -> None:
+        """A 5xx response raises NetworkError after retries."""
+        from aiologging.types import BatchConfig
+
+        call_count = 0
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            return httpx.Response(500, text="Server Error")
+
+        handler = self._make_handler_with_transport(
+            AsyncHttpJsonHandler,
+            respond,
+            batch_config=BatchConfig(max_retries=1, retry_delay=0.01),
+        )
+
+        with pytest.raises(NetworkError, match="Server Error"):
+            await handler.flush([self._create_test_record()])
+
+        # 1 initial attempt + 1 retry
+        assert call_count == 2
+        await handler.close()
+
+    @pytest.mark.asyncio
+    async def test_flush_client_error_does_not_retry(self) -> None:
+        """A 4xx response fails immediately without retries."""
+        from aiologging.types import BatchConfig
+
+        call_count = 0
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            return httpx.Response(400, text="Bad Request")
+
+        handler = self._make_handler_with_transport(
+            AsyncHttpJsonHandler,
+            respond,
+            batch_config=BatchConfig(max_retries=3, retry_delay=0.01),
+        )
+
+        with pytest.raises(NetworkError, match="Bad Request"):
+            await handler.flush([self._create_test_record()])
+
+        assert call_count == 1
+        await handler.close()
+
+    @pytest.mark.asyncio
+    async def test_close_closes_httpx_client(self) -> None:
+        """Closing the handler closes the underlying httpx client."""
+        handler = self._make_handler_with_transport(
+            AsyncHttpJsonHandler, lambda request: httpx.Response(200)
+        )
+        client = handler._session
+
+        await handler.close()
+
+        assert client.is_closed
+
+    @pytest.mark.asyncio
+    async def test_session_recreated_after_close(self) -> None:
+        """A new httpx client is created when the old one is closed."""
+        handler = AsyncHttpJsonHandler(
+            "https://example.com/api/logs", backend="httpx"
+        )
+
+        first = await handler._get_session()
+        assert isinstance(first, httpx.AsyncClient)
+        await first.aclose()
+
+        second = await handler._get_session()
+        assert second is not first
+        assert not second.is_closed
+
+        await handler.close()
+
+    @pytest.mark.asyncio
+    async def test_response_adapter(self) -> None:
+        """_HttpxResponseAdapter exposes aiohttp-style status and text."""
+        response = httpx.Response(404, text="Not Found")
+        adapter = _HttpxResponseAdapter(response)
+
+        assert adapter.status == 404
+        assert await adapter.text() == "Not Found"
+
+    @pytest.mark.asyncio
+    async def test_authenticator_receives_httpx_client(self) -> None:
+        """The authenticator is called with the httpx client instance."""
+        seen_sessions: List[object] = []
+
+        async def authenticator(session, request_data):
+            seen_sessions.append(session)
+            return {"Authorization": "Bearer token"}
+
+        requests: List[httpx.Request] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200)
+
+        handler = self._make_handler_with_transport(
+            AsyncHttpJsonHandler, respond, authenticator=authenticator
+        )
+
+        await handler.flush([self._create_test_record()])
+        await handler.close()
+
+        assert len(seen_sessions) == 1
+        assert isinstance(seen_sessions[0], httpx.AsyncClient)
+        assert requests[0].headers["Authorization"] == "Bearer token"
 
 
 if __name__ == "__main__":

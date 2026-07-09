@@ -376,6 +376,7 @@ class ConfigManager:
             timeout=config.get("timeout", 30.0),
             verify_ssl=config.get("verify_ssl", True),
             level=level,
+            backend=config.get("backend"),
         )
 
     def _create_http_json_handler(
@@ -394,6 +395,7 @@ class ConfigManager:
             timeout=config.get("timeout", 30.0),
             verify_ssl=config.get("verify_ssl", True),
             level=level,
+            backend=config.get("backend"),
         )
 
     def _create_rotating_file_handler(
