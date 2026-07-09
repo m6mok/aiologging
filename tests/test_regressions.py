@@ -8,16 +8,22 @@ Each test here pins down a specific bug that was found and fixed:
 - closing a stream handler closed sys.stderr / sys.stdout
 - propagation to an already closed parent logger raised
 - AiologgingError mutated the caller's details dictionary
+- GC of consumer/worker coroutines stranded on a closed loop spilled
+  noise into stderr (never-awaited RuntimeWarning, ContextVar reset
+  ValueError, "Exception ignored" from queue.get cleanup)
 """
 
 from __future__ import annotations
 
 import asyncio
+import gc
 import io
 import logging
 import sys
+import warnings
+from typing import Any, List
 
-from aiologging import AsyncLogger
+from aiologging import AsyncHandler, AsyncLogger, AsyncLoggerManager
 from aiologging.exceptions import AiologgingError
 from aiologging.handlers.stream import AsyncStreamHandler
 
@@ -167,3 +173,71 @@ class TestRealStreamWriter:
         await server.wait_closed()
 
         assert b"over tcp" in b"".join(received)
+
+
+class _SlowSink(AsyncHandler):
+    """Sink slow enough to leave a backlog when the loop dies."""
+
+    async def _emit(self, record: logging.LogRecord, message: str) -> None:
+        await asyncio.sleep(0.001)
+
+
+class TestLoopDeathTeardownIsQuiet:
+    """
+    Closing an event loop with the consumer and handler workers still
+    alive, then resuming on a fresh loop, must not spill cosmetic
+    noise when the stranded coroutines are GC-finalized: no
+    ``RuntimeWarning: coroutine ... was never awaited`` for a worker
+    that never got its first step, no ``ValueError: token was created
+    in a different Context`` from the ``_IN_CONSUMER`` reset, and no
+    ``Exception ignored`` from ``queue.get()`` touching the closed
+    loop.
+    """
+
+    def test_gc_after_loop_death_is_silent(self) -> None:
+        manager = AsyncLoggerManager()
+        logger = manager.getLogger("test.loopdeath")
+        logger.setLevel(logging.INFO)
+        logger.addHandler(_SlowSink())
+
+        async def produce(count: int) -> None:
+            for i in range(count):
+                await logger.info("msg %d", i)
+
+        async def rescue() -> None:
+            await produce(1)
+            await manager.flush()
+
+        unraisable: List[Any] = []
+        original_hook = sys.unraisablehook
+        sys.unraisablehook = unraisable.append
+        try:
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+
+                # Kill the loop with the queue undrained and the
+                # consumer/worker tasks still alive
+                dying = asyncio.new_event_loop()
+                try:
+                    dying.run_until_complete(produce(200))
+                finally:
+                    dying.close()
+                del dying
+                gc.collect()
+
+                # The rebuild on the fresh loop drops the stranded
+                # tasks; their coroutines are finalized here
+                asyncio.run(rescue())
+                gc.collect()
+        finally:
+            sys.unraisablehook = original_hook
+
+        runtime_warnings = [
+            str(w.message)
+            for w in caught
+            if issubclass(w.category, RuntimeWarning)
+        ]
+        assert runtime_warnings == []
+        assert [args.exc_value for args in unraisable] == []
+
+        asyncio.run(manager.shutdown())

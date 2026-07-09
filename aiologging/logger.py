@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import concurrent.futures
+import inspect
 import io
 import logging
 import os
@@ -95,6 +96,27 @@ _INLINE_HANDLED_ATTR = "_aiologging_inline_handled"
 # Used to render exc_info into exc_text when a record is frozen for the
 # queue; any stdlib-compatible formatter picks exc_text up later.
 _exception_formatter = logging.Formatter()
+
+
+def _close_unstarted_task(task: "Optional[asyncio.Task[None]]") -> None:
+    """
+    Close the coroutine of a task stranded on a closed event loop.
+
+    A consumer/worker task created right before its loop closed never
+    runs its first step; when the task is garbage-collected the still
+    unstarted coroutine emits ``RuntimeWarning: coroutine ... was
+    never awaited``. Closing it silences that. Only tasks whose loop
+    is already closed are touched — anywhere else the task can still
+    run (or be cancelled) normally.
+    """
+    if task is None or task.done() or not task.get_loop().is_closed():
+        return
+    coro = task.get_coro()
+    if (
+        asyncio.iscoroutine(coro)
+        and inspect.getcoroutinestate(coro) == inspect.CORO_CREATED
+    ):
+        coro.close()
 
 
 def _check_level(level: Union[int, str]) -> int:
@@ -826,6 +848,7 @@ class _HandlerDispatcher:
         ):
             return
 
+        _close_unstarted_task(self._task)
         if self._queue is not None:
             if self._in_flight is not None:
                 self._pending.appendleft(self._in_flight)
@@ -902,6 +925,7 @@ class _HandlerDispatcher:
 
     async def _run(self, queue: asyncio.Queue[_DispatchItem]) -> None:
         """Drain the dispatch queue, handling records one at a time."""
+        loop = asyncio.get_running_loop()
         token = _IN_CONSUMER.set(True)
         try:
             while True:
@@ -935,8 +959,21 @@ class _HandlerDispatcher:
                         self._in_flight = None
                         completion.done_one()
                     queue.task_done()
+        except RuntimeError:
+            # Our loop died under us: the coroutine is being
+            # GC-finalized and ``queue.get()``'s cleanup touched the
+            # closed loop. Exit quietly — queued and in-flight items
+            # are rescued when the worker is rebuilt.
+            if not loop.is_closed():
+                raise
         finally:
-            _IN_CONSUMER.reset(token)
+            try:
+                _IN_CONSUMER.reset(token)
+            except ValueError:
+                # GC-finalized after its loop closed: the reset runs
+                # in a foreign context. Cosmetic — the var dies with
+                # the context the token was created in.
+                pass
 
     async def suspend(self) -> None:
         """
@@ -956,6 +993,7 @@ class _HandlerDispatcher:
                 pass
             except Exception:
                 pass
+            _close_unstarted_task(task)
         self._task = None
 
     async def stop(self) -> None:
@@ -1276,6 +1314,7 @@ class AsyncLoggerManager:
         # Rebuilding: rescue records stuck in the previous queue (the
         # loop changed or the consumer died), including the one the
         # dead consumer was dispatching when it was interrupted
+        _close_unstarted_task(self._consumer_task)
         if self._queue is not None:
             if self._in_flight is not None:
                 self._pending.appendleft(self._in_flight)
@@ -1303,6 +1342,7 @@ class AsyncLoggerManager:
 
     async def _consume(self, queue: asyncio.Queue[_QueueItem]) -> None:
         """Drain the queue, fanning records out to handler workers."""
+        loop = asyncio.get_running_loop()
         token = _IN_CONSUMER.set(True)
         try:
             while True:
@@ -1330,8 +1370,21 @@ class AsyncLoggerManager:
                     if not interrupted:
                         self._in_flight = None
                     queue.task_done()
+        except RuntimeError:
+            # Our loop died under us: the coroutine is being
+            # GC-finalized and ``queue.get()``'s cleanup touched the
+            # closed loop. Exit quietly — queued and in-flight
+            # records are rescued when the consumer is rebuilt.
+            if not loop.is_closed():
+                raise
         finally:
-            _IN_CONSUMER.reset(token)
+            try:
+                _IN_CONSUMER.reset(token)
+            except ValueError:
+                # GC-finalized after its loop closed: the reset runs
+                # in a foreign context. Cosmetic — the var dies with
+                # the context the token was created in.
+                pass
 
     async def _dispatch(
         self,
@@ -1445,6 +1498,7 @@ class AsyncLoggerManager:
                 pass
             except Exception:
                 pass
+            _close_unstarted_task(task)
         self._consumer_task = None
         self._queue = None
         self._loop = None
@@ -1555,6 +1609,7 @@ class AsyncLoggerManager:
                 pass
             except Exception:
                 pass
+            _close_unstarted_task(task)
         self._consumer_task = None
 
         for dispatcher in list(self._dispatchers.values()):

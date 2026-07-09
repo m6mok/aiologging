@@ -47,18 +47,7 @@ Detailed guides live in [docs/](docs/):
 
 ## TODO
 
-- Silence cosmetic stderr noise when an event loop dies with the
-  consumer/worker coroutines still alive (surfaced by the stress
-  harness, `chaos.loop_switch` / `chaos.flush_sync_rescue`; no
-  records are lost):
-  - `_IN_CONSUMER.reset(token)` in the `finally` of
-    `AsyncLoggerManager._consume` and `_HandlerDispatcher._run`
-    raises `ValueError: token was created in a different Context`
-    when the coroutine is GC-finalized after its loop is closed —
-    wrap the reset in `try/except ValueError`.
-  - `RuntimeWarning: coroutine '_HandlerDispatcher._run' was never
-    awaited` when a worker task is created right before its loop
-    closes and never gets to start.
+(currently empty)
 
 ## Hard rules
 
