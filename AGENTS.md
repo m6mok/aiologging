@@ -81,13 +81,14 @@ New scenarios (delivery-guarantee gaps first):
   (Found and fixed a real bug: `AsyncFileHandler` lost the whole
   backlog at atexit because aiofiles needs executors, which are dead
   during interpreter shutdown — now falls back to blocking I/O.)
-- [ ] D2 inline error path: `urlopen` raising (ConnectionError /
+- [x] D2 inline error path: `urlopen` raising (ConnectionError /
   HTTP 500) must fall back to the queue exactly once; plus a mixed
   INFO+ERROR stream through the bridge (all current D2 scenarios are
   pure-ERROR).
-- [ ] D3 matrix: `LevelAwareDrop` over `drop_new` (only `drop_old` is
-  covered), overload via `enqueue_from_thread` with a drop policy,
-  watermark-boundary behaviour.
+- [x] D3 matrix: `LevelAwareDrop` over `drop_new` (only `drop_old` is
+  covered), overload via `enqueue_from_thread` with a drop policy.
+  (Watermark-boundary behaviour is already pinned by unit tests in
+  `tests/test_drop_policy.py` — no stress scenario needed.)
 - [ ] `delivery="await"` under faults: flaky/slow sink, full queue
   with drop policies, and cancellation of an awaiting caller (record
   neither lost nor duplicated).

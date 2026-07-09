@@ -83,12 +83,13 @@ dropped, lost or duplicated.
 - **delivery** — the D1/D2/D3 delivery guarantees: `flush_sync`
   across repeated loop churn, from foreign threads and with records
   stuck in handler buffers; inline ERROR delivery through the bridge
-  (token-bucket bound, hanging sends, thread swarms — always
-  exactly-once overall); `LevelAwareDrop` shedding only low-severity
-  records under overload; and the atexit drain, exercised in a
-  subprocess (a process exiting without `shutdown()` must lose
-  nothing; with `set_atexit_flush(0)` it must warn with the exact
-  backlog).
+  (token-bucket bound; hanging, failing and mixed-severity sends;
+  thread swarms — always exactly-once overall); `LevelAwareDrop`
+  shedding only low-severity records under overload (over both
+  `drop_old` and `drop_new`, from async producers and from bridge
+  threads); and the atexit drain, exercised in a subprocess (a
+  process exiting without `shutdown()` must lose nothing; with
+  `set_atexit_flush(0)` it must warn with the exact backlog).
 
 ## Adding a scenario
 

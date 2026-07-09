@@ -2,15 +2,18 @@
 Delivery guarantees under stress (the D1/D2/D3 features):
 
 - D1 ``flush_sync``: repeated loop churn with a backlog, concurrent
-  callers from foreign threads, and records stuck in handler buffers
-  when the loop dies.
+  callers from foreign threads, records stuck in handler buffers
+  when the loop dies, and the atexit drain (in a subprocess — the
+  hook only runs at interpreter exit).
 - D2 inline delivery: an ERROR burst through the bridge must be
-  bounded by the token bucket, a hanging send (the DNS hole) must not
-  stall the caller past the deadline, and concurrent threads must
-  neither deadlock nor lose or duplicate records.
+  bounded by the token bucket, hanging and failing sends must leave
+  the record on the queue path without stalling the caller, a mixed
+  INFO+ERROR stream stays exactly-once per class, and concurrent
+  threads must neither deadlock nor lose or duplicate records.
 - D3 ``LevelAwareDrop``: under sustained overload every ERROR
   survives, only low-severity records are sacrificed, and the drop
-  accounting still balances.
+  accounting still balances — over both ``drop_old`` and
+  ``drop_new``, from async producers and from bridge threads.
 
 Everything runs offline: the queue path uses ``httpx.MockTransport``,
 the inline path replaces ``urllib.request.urlopen`` with a local fake
@@ -56,10 +59,19 @@ class _FakeResponse:
 
 
 class _FakeUrlopen:
-    """Replacement for urllib.request.urlopen; counts inline posts."""
+    """
+    Replacement for urllib.request.urlopen; counts inline posts.
+    With ``error`` set every call raises after counting the attempt.
+    """
 
-    def __init__(self, delay: float = 0.0) -> None:
+    def __init__(
+        self,
+        delay: float = 0.0,
+        error: Optional[Exception] = None,
+    ) -> None:
         self.delay = delay
+        self.error = error
+        self.attempts = 0
         self.posts: List[str] = []
         self._lock = threading.Lock()
 
@@ -69,8 +81,12 @@ class _FakeUrlopen:
         timeout: Optional[float] = None,
         context: Any = None,
     ) -> _FakeResponse:
+        with self._lock:
+            self.attempts += 1
         if self.delay:
             time.sleep(self.delay)
+        if self.error is not None:
+            raise self.error
         payload = json.loads(request.data.decode("utf-8"))
         with self._lock:
             self.posts.append(payload["text"])
@@ -102,10 +118,11 @@ class _PatchedUrlopen:
 
 def _make_telegram_pager(
     ctx: Context, manager: Any, **handler_kwargs: Any
-) -> Tuple[Any, Dict[str, int]]:
+) -> Tuple[Any, Dict[str, int], List[str]]:
     """
     A "pager" logger with a Telegram handler whose queue path counts
-    delivered records through an httpx mock transport.
+    delivered records through an httpx mock transport. Returns the
+    handler, a counter dict and the list of delivered queue lines.
     """
     try:
         import httpx
@@ -115,10 +132,13 @@ def _make_telegram_pager(
     from aiologging.types import BatchConfig
 
     counters = {"queue_records": 0}
+    queue_lines: List[str] = []
 
     def respond(request: "httpx.Request") -> "httpx.Response":
         text = json.loads(request.content)["text"]
-        counters["queue_records"] += len(text.splitlines())
+        lines = text.splitlines()
+        counters["queue_records"] += len(lines)
+        queue_lines.extend(lines)
         return httpx.Response(200)
 
     handler = AsyncTelegramHandler(
@@ -136,7 +156,7 @@ def _make_telegram_pager(
     pager.setLevel("INFO")
     pager.propagate = False
     pager.addHandler(handler)
-    return handler, counters
+    return handler, counters, queue_lines
 
 
 # ----------------------------------------------------------------------
@@ -346,7 +366,7 @@ def inline_error_burst(ctx: Context) -> None:
     from aiologging.bridge import StdlibBridgeHandler
 
     manager = ctx.new_manager(queue_size=50_000)
-    _, counters = _make_telegram_pager(ctx, manager)
+    _, counters, _ = _make_telegram_pager(ctx, manager)
     bridge = StdlibBridgeHandler(
         manager=manager,
         inline_level=logging.ERROR,
@@ -409,7 +429,7 @@ def inline_hanging_send(ctx: Context) -> None:
     from aiologging.bridge import StdlibBridgeHandler
 
     manager = ctx.new_manager()
-    _, counters = _make_telegram_pager(ctx, manager)
+    _, counters, _ = _make_telegram_pager(ctx, manager)
     bridge = StdlibBridgeHandler(
         manager=manager,
         inline_level=logging.ERROR,
@@ -459,7 +479,7 @@ def inline_thread_swarm(ctx: Context) -> None:
     from aiologging.bridge import StdlibBridgeHandler
 
     manager = ctx.new_manager(queue_size=50_000)
-    _, counters = _make_telegram_pager(ctx, manager)
+    _, counters, _ = _make_telegram_pager(ctx, manager)
     bridge = StdlibBridgeHandler(
         manager=manager,
         inline_level=logging.ERROR,
@@ -522,6 +542,148 @@ def inline_thread_swarm(ctx: Context) -> None:
     )
 
 
+@scenario("delivery.inline_failing_send")
+def inline_failing_send(ctx: Context) -> None:
+    """D2: a raising send falls back to the queue exactly once."""
+    from aiologging.bridge import StdlibBridgeHandler
+
+    manager = ctx.new_manager(queue_size=50_000)
+    _, counters, _ = _make_telegram_pager(ctx, manager)
+    bridge = StdlibBridgeHandler(
+        manager=manager,
+        inline_level=logging.ERROR,
+        inline_timeout=1.0,
+    )
+    count = ctx.n(300, 60)
+    fake = _FakeUrlopen(
+        error=OSError("injected connection failure")
+    )
+
+    with _PatchedUrlopen(fake):
+        started = time.perf_counter()
+        for seq in range(count):
+            bridge.handle(
+                make_stdlib_record(
+                    "pager",
+                    seq=seq,
+                    producer=0,
+                    level=logging.ERROR,
+                    message=f"err {seq}",
+                )
+            )
+        burst_elapsed = time.perf_counter() - started
+        drained = manager.flush_sync(timeout=60.0)
+
+    ctx.metrics.update(
+        {
+            "records_sent": count,
+            "burst_elapsed_s": round(burst_elapsed, 3),
+            "inline_attempts": fake.attempts,
+            "inline_delivered": fake.records,
+            "queue_records": counters["queue_records"],
+        }
+    )
+    ctx.check(
+        "inline sends were attempted and all failed",
+        fake.attempts >= 1 and fake.records == 0,
+        f"attempts={fake.attempts} delivered={fake.records}",
+    )
+    ctx.check(
+        "the failing path never stalled the caller",
+        burst_elapsed < 3.0,
+        f"elapsed={burst_elapsed:.3f}s",
+    )
+    ctx.check("drain succeeded", drained)
+    ctx.check(
+        "every record fell back to the queue exactly once",
+        counters["queue_records"] == count,
+        f"queue={counters['queue_records']} sent={count}",
+    )
+
+
+@scenario("delivery.inline_mixed_levels")
+def inline_mixed_levels(ctx: Context) -> None:
+    """D2: interleaved INFO+ERROR — exactly-once for each class."""
+    from aiologging.bridge import StdlibBridgeHandler
+
+    manager = ctx.new_manager(queue_size=50_000)
+    _, counters, queue_lines = _make_telegram_pager(ctx, manager)
+    bridge = StdlibBridgeHandler(
+        manager=manager,
+        inline_level=logging.ERROR,
+        inline_timeout=1.0,
+    )
+    pairs = ctx.n(400, 80)
+    fake = _FakeUrlopen(delay=0.002)
+
+    with _PatchedUrlopen(fake):
+        started = time.perf_counter()
+        for seq in range(pairs):
+            bridge.handle(
+                make_stdlib_record(
+                    "pager",
+                    seq=seq,
+                    producer=0,
+                    level=logging.INFO,
+                    message=f"MIXINF {seq}",
+                )
+            )
+            bridge.handle(
+                make_stdlib_record(
+                    "pager",
+                    seq=seq,
+                    producer=1,
+                    level=logging.ERROR,
+                    message=f"MIXERR {seq}",
+                )
+            )
+        stream_elapsed = time.perf_counter() - started
+        drained = manager.flush_sync(timeout=60.0)
+
+    inline_lines = [
+        line for text in fake.posts for line in text.splitlines()
+    ]
+    inline_inf = sum("MIXINF" in line for line in inline_lines)
+    inline_err = sum("MIXERR" in line for line in inline_lines)
+    queue_inf = sum("MIXINF" in line for line in queue_lines)
+    queue_err = sum("MIXERR" in line for line in queue_lines)
+
+    ctx.metrics.update(
+        {
+            "records_sent": 2 * pairs,
+            "stream_elapsed_s": round(stream_elapsed, 3),
+            "inline_errors": inline_err,
+            "queue_infos": queue_inf,
+            "queue_errors": queue_err,
+        }
+    )
+    ctx.check("drain succeeded", drained)
+    ctx.check(
+        "INFO never travels inline",
+        inline_inf == 0,
+        f"inline_inf={inline_inf}",
+    )
+    ctx.check(
+        "every INFO delivered exactly once via the queue",
+        queue_inf == pairs,
+        f"queue_inf={queue_inf} sent={pairs}",
+    )
+    ctx.check(
+        "ERROR exactly-once (inline + queue == sent)",
+        inline_err + queue_err == pairs,
+        f"inline={inline_err} queue={queue_err} sent={pairs}",
+    )
+    ctx.check(
+        "the bucket let at least one ERROR through inline",
+        inline_err >= 1,
+    )
+    ctx.check(
+        "the bucket bounded inline sends (burst=1, 2/min)",
+        inline_err <= 2,
+        f"inline={inline_err}",
+    )
+
+
 # ----------------------------------------------------------------------
 # D3: level-aware drop under overload
 # ----------------------------------------------------------------------
@@ -575,6 +737,156 @@ async def drop_policy_errors_survive(ctx: Context) -> None:
     )
     ctx.check(
         "every ERROR survived the overload",
+        errors_delivered == errors,
+        f"delivered={errors_delivered} sent={errors}",
+    )
+    ctx.check(
+        "low-severity records were actually sacrificed", dropped > 0
+    )
+    ctx.check(
+        "accounting balances (sent == delivered + dropped)",
+        sent == sink.received + dropped,
+        f"sent={sent} delivered={sink.received} dropped={dropped}",
+    )
+    ctx.check(
+        "delivered records stay ordered", sink.ordered_per_producer()
+    )
+
+
+@scenario("delivery.drop_policy_drop_new")
+async def drop_policy_drop_new(ctx: Context) -> None:
+    """D3: the policy protects ERRORs over drop_new as well."""
+    from aiologging.logger import LevelAwareDrop
+
+    manager = ctx.new_manager(queue_size=200, overflow="drop_new")
+    manager.drop_policy = LevelAwareDrop(
+        discard_below=logging.WARNING, watermark=0.7
+    )
+    sink = CollectorHandler(delay=_SLOW, track=True)
+    logger = ctx.new_logger(manager)
+    logger.addHandler(sink)
+
+    info_producers = 6
+    info_each = ctx.n(3_000, 500)
+    errors = ctx.n(200, 50)
+    error_producer = 999
+
+    async def error_stream() -> None:
+        for seq in range(errors):
+            await logger.error(
+                "critical %d",
+                seq,
+                extra={"seq": seq, "producer": error_producer},
+            )
+            await asyncio.sleep(0)
+
+    _, sent_info = await asyncio.gather(
+        error_stream(),
+        produce_many(logger, info_producers, info_each),
+    )
+    await manager.flush()
+
+    sent = sent_info + errors
+    dropped = int(manager.get_metrics()["records_dropped"])
+    errors_delivered = len(sink.by_producer.get(error_producer, []))
+    ctx.metrics.update(
+        {
+            "records_sent": sent,
+            "errors_sent": errors,
+            "errors_delivered": errors_delivered,
+            "records_delivered": sink.received,
+            "records_dropped": dropped,
+            "drop_ratio": round(dropped / sent, 3),
+        }
+    )
+    ctx.check(
+        "every ERROR survived the overload",
+        errors_delivered == errors,
+        f"delivered={errors_delivered} sent={errors}",
+    )
+    ctx.check(
+        "low-severity records were actually sacrificed", dropped > 0
+    )
+    ctx.check(
+        "accounting balances (sent == delivered + dropped)",
+        sent == sink.received + dropped,
+        f"sent={sent} delivered={sink.received} dropped={dropped}",
+    )
+    ctx.check(
+        "delivered records stay ordered", sink.ordered_per_producer()
+    )
+
+
+@scenario("delivery.drop_policy_bridge_threads")
+async def drop_policy_bridge_threads(ctx: Context) -> None:
+    """D3: thread producers via the bridge: ERRORs still survive."""
+    from aiologging.logger import LevelAwareDrop
+
+    manager = ctx.new_manager(queue_size=200, overflow="drop_old")
+    manager.drop_policy = LevelAwareDrop(
+        discard_below=logging.WARNING, watermark=0.7
+    )
+    sink = CollectorHandler(delay=_SLOW, track=True)
+    bridge_root = manager.getLogger("bridge")
+    bridge_root.setLevel("INFO")
+    bridge_root.propagate = False
+    bridge_root.addHandler(sink)
+
+    # Start the consumer via the public path so the thread producers
+    # find a live loop to hop onto (see chaos.bridge_thread_swarm).
+    warmup = ctx.new_logger(manager, name="warmup")
+    await warmup.info("warmup")
+    await manager.flush()
+
+    info_threads = 4
+    info_each = ctx.n(2_000, 400)
+    errors = ctx.n(200, 50)
+    error_producer = 999
+
+    def info_producer(producer: int) -> None:
+        for seq in range(info_each):
+            manager.enqueue_from_thread(
+                make_stdlib_record(
+                    f"bridge.t{producer}", seq=seq, producer=producer
+                )
+            )
+
+    def error_producer_thread() -> None:
+        for seq in range(errors):
+            manager.enqueue_from_thread(
+                make_stdlib_record(
+                    "bridge.err",
+                    seq=seq,
+                    producer=error_producer,
+                    level=logging.ERROR,
+                    message=f"critical {seq}",
+                )
+            )
+            time.sleep(0)
+
+    await asyncio.gather(
+        asyncio.to_thread(error_producer_thread),
+        *(
+            asyncio.to_thread(info_producer, producer)
+            for producer in range(info_threads)
+        ),
+    )
+    await manager.flush()
+
+    sent = info_threads * info_each + errors
+    dropped = int(manager.get_metrics()["records_dropped"])
+    errors_delivered = len(sink.by_producer.get(error_producer, []))
+    ctx.metrics.update(
+        {
+            "records_sent": sent,
+            "errors_sent": errors,
+            "errors_delivered": errors_delivered,
+            "records_delivered": sink.received,
+            "records_dropped": dropped,
+        }
+    )
+    ctx.check(
+        "every bridged ERROR survived the overload",
         errors_delivered == errors,
         f"delivered={errors_delivered} sent={errors}",
     )
