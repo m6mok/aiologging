@@ -74,8 +74,8 @@ def chaos_mix(ctx: Context) -> None:
             queue_size=queue_size,
             overflow=overflow,  # type: ignore[arg-type]
             delivery=delivery,  # type: ignore[arg-type]
+            drop_policy=policy,
         )
-        manager.drop_policy = policy
         sink = CollectorHandler(
             delay=rng.choice([0.0, 0.0005, 0.002]),
             fail_every=rng.choice([0, 0, 5, 9]),

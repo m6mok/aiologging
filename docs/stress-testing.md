@@ -16,18 +16,26 @@ run takes minutes and is on-demand only — do not add it to CI.
 
 ```bash
 make stress            # full run (a few minutes), JSON report in logs/
-make stress-quick      # scaled-down smoke run (~10 seconds)
+make stress-quick      # scaled-down smoke run (~20 seconds)
 
 # ad-hoc:
 VIRTUAL_ENV=.venv-3.14 uv run --active --python 3.14 \
-    python -m stress run [patterns ...] [--quick] [--json PATH]
+    python -m stress run [patterns ...] [--quick] [--json PATH] \
+    [--repeat N] [--enforce-baselines]
 VIRTUAL_ENV=.venv-3.14 uv run --active --python 3.14 \
     python -m stress list
 ```
 
 `patterns` are substring filters (`overload`, `chaos.loop`, …).
 Exit code is non-zero when any scenario FAILs or ERRORs; SKIPs
-(missing optional dependency) are fine.
+(missing optional dependency) are fine. `--repeat N` reruns the
+selection N times (flake hunting for the race-sensitive scenarios).
+
+Full runs compare throughput metrics against the floors in
+`stress/baselines.json` (~30% of the reference machine's numbers);
+misses are advisory warnings unless `--enforce-baselines` turns them
+into failing checks. Quick runs are never compared. The fuzz seed can
+be overridden with `STRESS_SEED=<int>`.
 
 Expect stderr noise from the loop-churn scenarios (`chaos.loop_switch`,
 `chaos.flush_sync_rescue`): they close event loops with tasks still
@@ -38,14 +46,17 @@ pending!" and similar. That is part of the scenario, not a failure.
 
 ```
 stress/
-├── __main__.py     CLI (list / run)
+├── __main__.py     CLI (list / run, --repeat, --enforce-baselines)
 ├── runner.py       registry, Context, per-scenario isolation
 ├── sinks.py        instrumented handlers: CollectorHandler
 │                   (delay / fail_every / (producer, seq) tracking),
 │                   HangingHandler
 ├── workload.py     producers: concurrent burst, fixed-rate paced,
 │                   stdlib-record factory for bridge scenarios
-├── metrics.py      percentiles, HeapSampler (tracemalloc), wait_until
+├── metrics.py      percentiles, HeapSampler (tracemalloc + RSS),
+│                   wait_until
+├── baseline.py     throughput floors for full runs
+├── baselines.json  the floor values (see file comment to recalibrate)
 ├── report.py       console report + JSON dump
 └── scenarios/      one module per category
 ```
@@ -61,22 +72,27 @@ dropped, lost or duplicated.
 
 - **throughput** — call-site vs end-to-end rate with concurrent
   producers, per-record latency of delivery mode `"await"`, fan-out
-  to several handler workers. Invariants: nothing dropped with the
-  `block` policy, per-producer ordering preserved.
+  to several handler workers, 16 KiB payloads plus `exc_info`
+  tracebacks. Invariants: nothing dropped with the `block` policy,
+  per-producer ordering preserved.
 - **overload** — tiny queues plus slow sinks. Invariants: drop
   accounting balances exactly (`sent == delivered + dropped`),
   `drop_old` keeps the newest records (sentinel technique), `block`
-  loses nothing, `flush(timeout)` / `shutdown(timeout)` stay within
+  loses nothing (including a quiet logger sharing the queue with a
+  flooding one), `flush(timeout)` / `shutdown(timeout)` stay within
   their bounds under a backlog.
-- **soak** — sustained paced load. Invariants: the Python heap
-  plateaus (HeapSampler compares late samples with early ones),
-  produce/flush cycles do not accumulate asyncio tasks, size-based
-  rotation keeps `backup_count` and file sizes honest.
+- **soak** — sustained paced load. Invariants: the Python heap and
+  the peak RSS plateau (HeapSampler compares late samples with early
+  ones), produce/flush cycles do not accumulate asyncio tasks, size-
+  and time-based rotation keep `backup_count`, file sizes and record
+  counts honest.
 - **chaos** — fault injection: a sink failing every N-th attempt
   (retries must mask it without reordering), a hanging sink (must not
   stall others nor block `shutdown(timeout)`), an HTTP endpoint
-  rejecting every 4th request (batch retries must deliver everything
-  exactly once), killing the event loop mid-stream (the rescue path
+  rejecting every 4th request on both the httpx and aiohttp backends
+  (batch retries must deliver everything exactly once), handlers
+  added/removed mid-stream, manager reuse across `shutdown()`
+  generations, killing the event loop mid-stream (the rescue path
   must lose nothing; ≤ the in-flight records may be duplicated),
   `flush_sync` draining a backlog with no loop at all, and six
   threads flooding `enqueue_from_thread`.
@@ -87,9 +103,17 @@ dropped, lost or duplicated.
   thread swarms — always exactly-once overall); `LevelAwareDrop`
   shedding only low-severity records under overload (over both
   `drop_old` and `drop_new`, from async producers and from bridge
-  threads); and the atexit drain, exercised in a subprocess (a
-  process exiting without `shutdown()` must lose nothing; with
-  `set_atexit_flush(0)` it must warn with the exact backlog).
+  threads); the atexit drain, exercised in a subprocess (a process
+  exiting without `shutdown()` must lose nothing; with
+  `set_atexit_flush(0)` it must warn with the exact backlog); and
+  delivery mode `"await"` under faults (resolution implies delivery,
+  shed awaits still resolve, cancelled callers lose nothing).
+- **fuzz** — seeded random rounds over queue size × overflow policy
+  × drop policy × delivery mode × sink faults × bridge threads ×
+  loop churn, checking the exact accounting identity that must hold
+  for each combination. A failing check names the round's full
+  parameter set and the seed (`STRESS_SEED` reproduces it). This is
+  the scenario that catches bugs at the seams between features.
 
 ## Adding a scenario
 

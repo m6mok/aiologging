@@ -28,6 +28,7 @@ from aiologging.logger import (
     AsyncLogger,
     AsyncLoggerManager,
     DeliveryMode,
+    DropPolicyProtocol,
     OverflowPolicy,
 )
 
@@ -92,10 +93,14 @@ class Context:
         queue_size: int = 10_000,
         overflow: OverflowPolicy = "block",
         delivery: DeliveryMode = "enqueue",
+        drop_policy: Optional[DropPolicyProtocol] = None,
     ) -> AsyncLoggerManager:
         """Create an isolated manager; the runner shuts it down."""
         manager = AsyncLoggerManager(
-            queue_size=queue_size, overflow=overflow, delivery=delivery
+            queue_size=queue_size,
+            overflow=overflow,
+            delivery=delivery,
+            drop_policy=drop_policy,
         )
         self.managers.append(manager)
         return manager

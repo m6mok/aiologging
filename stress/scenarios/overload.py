@@ -180,6 +180,64 @@ async def slow_handler_isolation(ctx: Context) -> None:
     )
 
 
+@scenario("overload.noisy_neighbor")
+async def noisy_neighbor(ctx: Context) -> None:
+    """A flooding logger shares the queue with a quiet one; both whole."""
+    manager = ctx.new_manager(queue_size=100)
+    noisy_sink = CollectorHandler(delay=0.0005, track=True)
+    quiet_sink = CollectorHandler(track=True)
+    noisy = ctx.new_logger(manager, name="noisy")
+    noisy.addHandler(noisy_sink)
+    quiet = manager.getLogger("quiet")
+    quiet.setLevel("INFO")
+    quiet.propagate = False
+    quiet.addHandler(quiet_sink)
+
+    noisy_sent = ctx.n(4_000, 600)
+    quiet_sent = ctx.n(100, 30)
+
+    async def quiet_producer() -> None:
+        for seq in range(quiet_sent):
+            await quiet.info(
+                "quiet %d", seq, extra={"seq": seq, "producer": 0}
+            )
+            await asyncio.sleep(0.001)
+
+    started = time.perf_counter()
+    quiet_task = asyncio.get_running_loop().create_task(
+        quiet_producer()
+    )
+    await produce_many(logger=noisy, producers=4,
+                       count_each=noisy_sent // 4)
+    await quiet_task
+    quiet_wall = time.perf_counter() - started
+    await manager.flush()
+
+    dropped = int(manager.get_metrics()["records_dropped"])
+    ctx.metrics.update(
+        {
+            "noisy_sent": noisy_sent,
+            "quiet_sent": quiet_sent,
+            "quiet_wall_s": round(quiet_wall, 3),
+            "records_dropped": dropped,
+        }
+    )
+    ctx.check(
+        "the quiet logger delivered everything",
+        quiet_sink.received == quiet_sent,
+        f"received={quiet_sink.received} sent={quiet_sent}",
+    )
+    ctx.check(
+        "the noisy logger delivered everything",
+        noisy_sink.received == noisy_sent,
+        f"received={noisy_sink.received} sent={noisy_sent}",
+    )
+    ctx.check("nothing dropped with block", dropped == 0)
+    ctx.check(
+        "quiet ordering preserved", quiet_sink.ordered_per_producer()
+    )
+
+
 @scenario("overload.flush_timeout_under_backlog")
 async def flush_timeout_under_backlog(ctx: Context) -> None:
     """flush(timeout) must give up on time, a later flush delivers."""

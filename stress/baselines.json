@@ -1,0 +1,25 @@
+{
+  "_comment": [
+    "Throughput floors for FULL runs (records/s), set at roughly",
+    "30% of the values measured on a 2024 MacBook Air (M-series),",
+    "so a loaded machine passes but an order-of-magnitude",
+    "regression does not. Quick runs are never compared.",
+    "Advisory by default; 'run --enforce-baselines' turns misses",
+    "into failing checks. Recalibrate with a full run when the",
+    "reference hardware changes."
+  ],
+  "throughput.enqueue": {
+    "call_site_rate_per_s": 50000,
+    "end_to_end_rate_per_s": 50000
+  },
+  "throughput.await_latency": {
+    "rate_per_s": 18000
+  },
+  "throughput.fanout": {
+    "end_to_end_rate_per_s": 30000,
+    "deliveries_per_s": 120000
+  },
+  "chaos.bridge_thread_swarm": {
+    "bridge_rate_per_s": 25000
+  }
+}

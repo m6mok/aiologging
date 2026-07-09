@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import scenarios  # noqa: F401 - fills the registry
-from . import report, runner
+from . import baseline, report, runner
 
 
 def _cmd_list() -> int:
@@ -18,7 +18,11 @@ def _cmd_list() -> int:
 
 
 def _cmd_run(
-    patterns: List[str], quick: bool, json_path: Optional[str]
+    patterns: List[str],
+    quick: bool,
+    json_path: Optional[str],
+    repeat: int = 1,
+    enforce_baselines: bool = False,
 ) -> int:
     selected = runner.select(patterns)
     if not selected:
@@ -28,9 +32,22 @@ def _cmd_run(
     def on_start(item: runner.Scenario) -> None:
         print(f"... {item.name}", flush=True)
 
-    results = runner.run(patterns, quick=quick, on_start=on_start)
+    results: List[runner.ScenarioResult] = []
+    for iteration in range(repeat):
+        if repeat > 1:
+            print(f"--- pass {iteration + 1}/{repeat} ---", flush=True)
+        results += runner.run(patterns, quick=quick, on_start=on_start)
+
+    # Quick workloads are scaled down; baselines only make sense for
+    # full runs
+    warnings: List[str] = []
+    if not quick:
+        warnings = baseline.compare(results, enforce=enforce_baselines)
+
     print()
     print(report.render(results, quick=quick))
+    for line in warnings:
+        print(f"⚠ {line}")
     if json_path is not None:
         report.write_json(results, Path(json_path), quick=quick)
         print(f"\nJSON report written to {json_path}")
@@ -66,11 +83,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         metavar="PATH",
         help="also write a machine-readable JSON report",
     )
+    run_parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        metavar="N",
+        help="run the selected scenarios N times (flake hunting)",
+    )
+    run_parser.add_argument(
+        "--enforce-baselines",
+        action="store_true",
+        help="turn baseline misses into failing checks (full runs)",
+    )
 
     args = parser.parse_args(argv)
     if args.command == "list":
         return _cmd_list()
-    return _cmd_run(args.patterns, args.quick, args.json)
+    if args.repeat < 1:
+        print("--repeat must be >= 1", file=sys.stderr)
+        return 2
+    return _cmd_run(
+        args.patterns,
+        args.quick,
+        args.json,
+        repeat=args.repeat,
+        enforce_baselines=args.enforce_baselines,
+    )
 
 
 if __name__ == "__main__":

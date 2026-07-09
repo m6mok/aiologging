@@ -88,6 +88,68 @@ async def await_latency(ctx: Context) -> None:
     )
 
 
+@scenario("throughput.large_payloads")
+async def large_payloads(ctx: Context) -> None:
+    """16 KiB payloads plus exc_info tracebacks flow undamaged."""
+    manager = ctx.new_manager()
+    sink = CollectorHandler(track=True)
+    logger = ctx.new_logger(manager)
+    logger.addHandler(sink)
+
+    producers = 2
+    count_each = ctx.n(1_500, 200)
+    exceptions = ctx.n(300, 60)
+    exc_producer = 999
+
+    async def exception_stream() -> None:
+        for seq in range(exceptions):
+            try:
+                raise ValueError(f"synthetic failure {seq}")
+            except ValueError:
+                await logger.exception(
+                    "boom %d",
+                    seq,
+                    extra={"seq": seq, "producer": exc_producer},
+                )
+            await asyncio.sleep(0)
+
+    started = time.perf_counter()
+    _, sent_large = await asyncio.gather(
+        exception_stream(),
+        produce_many(
+            logger, producers, count_each, payload_bytes=16_384
+        ),
+    )
+    await manager.flush()
+    elapsed = time.perf_counter() - started
+
+    sent = sent_large + exceptions
+    payload_mib = sent_large * 16_384 / (1024 * 1024)
+    exc_delivered = len(sink.by_producer.get(exc_producer, []))
+    ctx.metrics.update(
+        {
+            "records_sent": sent,
+            "payload_mib": round(payload_mib, 1),
+            "throughput_mib_per_s": round(payload_mib / elapsed, 1),
+            "exceptions_delivered": exc_delivered,
+        }
+    )
+    ctx.check(
+        "every record delivered",
+        sink.received == sent,
+        f"received={sink.received} sent={sent}",
+    )
+    ctx.check(
+        "every exception record delivered",
+        exc_delivered == exceptions,
+        f"delivered={exc_delivered} sent={exceptions}",
+    )
+    ctx.check(
+        "ordering preserved with large payloads",
+        sink.ordered_per_producer(),
+    )
+
+
 @scenario("throughput.fanout")
 async def fanout(ctx: Context) -> None:
     """One logger fanning out to several handler workers."""

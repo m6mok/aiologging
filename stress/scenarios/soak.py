@@ -31,6 +31,7 @@ async def sustained_memory(ctx: Context) -> None:
         await manager.flush()
 
     growth = sampler.growth_bytes()
+    rss_growth = sampler.rss_growth_bytes()
     ctx.metrics.update(
         {
             "duration_s": duration_s,
@@ -38,6 +39,7 @@ async def sustained_memory(ctx: Context) -> None:
             "achieved_rate_per_s": int(sent / duration_s),
             "heap_growth_kib": growth // 1024,
             "heap_peak_kib": max(sampler.samples) // 1024,
+            "rss_growth_kib": rss_growth // 1024,
         }
     )
     ctx.check(
@@ -49,6 +51,13 @@ async def sustained_memory(ctx: Context) -> None:
         "heap growth stays under 4 MiB after warmup",
         growth < _GROWTH_LIMIT_BYTES,
         f"growth={growth // 1024} KiB",
+    )
+    # RSS is noisy (allocator arenas, C libraries); the bound only
+    # catches runaway growth, not fine regressions
+    ctx.check(
+        "peak RSS growth stays under 64 MiB after warmup",
+        rss_growth < 64 * 1024 * 1024,
+        f"rss_growth={rss_growth // 1024} KiB",
     )
 
 

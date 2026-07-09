@@ -47,66 +47,12 @@ Detailed guides live in [docs/](docs/):
 
 ## TODO
 
-Stress-testing roadmap (from the 2026-07 harness review; see
-[docs/stress-testing.md](docs/stress-testing.md) for context).
-
-Priority — CI integration:
-
-- [x] Add `make stress-quick` (~11 s, 25 scenarios) to the CI
-  pipeline as a required invariant gate. `make stress` (the full
-  multi-minute run) stays on-demand only — never add it to CI.
-
-Harness fixes:
-
-- [x] Enforce `Scenario.timeout` for sync (plain-function) scenarios
-  in `stress/runner.py` — today only coroutine scenarios are wrapped
-  in `wait_for`, so a deadlocked `flush_sync` scenario hangs the
-  whole run (run the function in a thread with `join(timeout)`).
-- [ ] Perf baselines: compare throughput metrics against a checked-in
-  baseline with a generous tolerance (or at least keep run history) —
-  today a 5x regression still reports OK.
-- [ ] Sample RSS (`resource.getrusage`) alongside `tracemalloc` in
-  `HeapSampler` — C-level allocations (httpx/aiofiles) are invisible.
-- [ ] Add `--repeat N` to `python -m stress run` for hunting rare
-  races (`chaos.loop_switch`, the thread-swarm scenarios).
-- [ ] Replace the tautological "no batch was delivered twice" check
-  in `chaos.http_mock_endpoint` with a set-based duplicate check on
-  `(producer, seq)`; let `Context.new_manager` accept `drop_policy`.
-
-New scenarios (delivery-guarantee gaps first):
-
-- [x] atexit drain (0.2.5): subprocess scenario — a script logs to a
-  file handler and exits without `shutdown()`; verify the file
-  contents. The only untested headline delivery guarantee.
-  (Found and fixed a real bug: `AsyncFileHandler` lost the whole
-  backlog at atexit because aiofiles needs executors, which are dead
-  during interpreter shutdown — now falls back to blocking I/O.)
-- [x] D2 inline error path: `urlopen` raising (ConnectionError /
-  HTTP 500) must fall back to the queue exactly once; plus a mixed
-  INFO+ERROR stream through the bridge (all current D2 scenarios are
-  pure-ERROR).
-- [x] D3 matrix: `LevelAwareDrop` over `drop_new` (only `drop_old` is
-  covered), overload via `enqueue_from_thread` with a drop policy.
-  (Watermark-boundary behaviour is already pinned by unit tests in
-  `tests/test_drop_policy.py` — no stress scenario needed.)
-- [ ] `delivery="await"` under faults: flaky/slow sink, full queue
-  with drop policies, and cancellation of an awaiting caller (record
-  neither lost nor duplicated).
-- [ ] `AsyncTimedRotatingFileHandler` churn (soak covers only
-  size-based rotation).
-- [ ] Seeded chaos-mix fuzz scenario: random levels / payload sizes /
-  interleaved `flush` + `flush_sync` / injected sink failures /
-  occasional loop churn, checked only by the accounting identity
-  (`sent == delivered + dropped`, duplicates ≤ in-flight); report the
-  seed in metrics.
-
-Lower priority:
-
-- [ ] Runtime topology churn (add/removeHandler mid-stream), noisy
-  vs. quiet logger fairness on the shared queue, manager reuse after
-  `shutdown()`, large payloads / `exc_info` tracebacks (current
-  payloads are 32–96 B), aiohttp backend (mock `_session.post`; no
-  MockTransport equivalent).
+(currently empty — the 2026-07 stress-testing roadmap is complete;
+see [docs/stress-testing.md](docs/stress-testing.md) for the
+resulting harness. It found and fixed two real delivery bugs: the
+atexit drain losing the whole file backlog, and the dead-loop rescue
+losing in-flight records. Reminder: `make stress-quick` gates CI,
+the full `make stress` stays on-demand only.)
 
 ## Hard rules
 

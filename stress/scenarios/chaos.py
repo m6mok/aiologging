@@ -109,6 +109,7 @@ async def http_mock_endpoint(ctx: Context) -> None:
         import httpx
     except ImportError:
         raise Skip("httpx not installed")
+    from collections import Counter
     from aiologging.handlers.http import AsyncHttpJsonHandler
     from aiologging.types import BatchConfig
 
@@ -141,9 +142,18 @@ async def http_mock_endpoint(ctx: Context) -> None:
     logger = ctx.new_logger(manager)
     logger.addHandler(handler)
 
-    sent = await produce_many(logger, 2, ctx.n(1_000, 150))
+    producers = 2
+    count_each = ctx.n(1_000, 150)
+    sent = await produce_many(logger, producers, count_each)
     await manager.flush()
 
+    # Producers share the message text per seq, so with no loss and
+    # no duplicated batch every distinct message arrives exactly
+    # ``producers`` times.
+    counts = Counter(item["message"] for item in delivered)
+    off_count = sum(
+        1 for count in counts.values() if count != producers
+    )
     ctx.metrics.update(
         {
             "records_sent": sent,
@@ -159,8 +169,194 @@ async def http_mock_endpoint(ctx: Context) -> None:
         f"delivered={len(delivered)} sent={sent}",
     )
     ctx.check(
-        "no batch was delivered twice",
-        len(delivered) <= sent,
+        "no record lost or duplicated by batch retries",
+        len(counts) == count_each and off_count == 0,
+        f"distinct={len(counts)} expected={count_each} "
+        f"off_count={off_count}",
+    )
+
+
+@scenario("chaos.http_aiohttp_backend")
+async def http_aiohttp_backend(ctx: Context) -> None:
+    """The aiohttp backend against an endpoint failing every 4th call."""
+    try:
+        import aiohttp  # noqa: F401
+    except ImportError:
+        raise Skip("aiohttp not installed")
+    from collections import Counter
+
+    from aiologging.handlers.http import AsyncHttpJsonHandler
+    from aiologging.types import BatchConfig
+
+    delivered: List[dict] = []
+    state = {"requests": 0, "rejected": 0}
+
+    class _FakeResponse:
+        def __init__(self, status: int) -> None:
+            self.status = status
+
+        async def text(self) -> str:
+            return "injected server error" if self.status != 200 else ""
+
+    class _FakeAiohttpSession:
+        """Duck-typed aiohttp.ClientSession: request/closed/close."""
+
+        closed = False
+
+        async def request(self, **kwargs: object) -> _FakeResponse:
+            state["requests"] += 1
+            if state["requests"] % 4 == 0:
+                state["rejected"] += 1
+                return _FakeResponse(500)
+            payload = kwargs.get("json")
+            assert isinstance(payload, list)
+            delivered.extend(payload)
+            return _FakeResponse(200)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    handler = AsyncHttpJsonHandler(
+        "https://stress.invalid/logs",
+        backend="aiohttp",
+        batch_config=BatchConfig(
+            batch_size=50,
+            flush_interval=0.2,
+            max_retries=5,
+            retry_delay=0.01,
+        ),
+    )
+    handler._create_session = (  # type: ignore[method-assign]
+        lambda: _FakeAiohttpSession()
+    )
+
+    manager = ctx.new_manager()
+    logger = ctx.new_logger(manager)
+    logger.addHandler(handler)
+
+    producers = 2
+    count_each = ctx.n(1_000, 150)
+    sent = await produce_many(logger, producers, count_each)
+    await manager.flush()
+
+    counts = Counter(item["message"] for item in delivered)
+    off_count = sum(
+        1 for count in counts.values() if count != producers
+    )
+    ctx.metrics.update(
+        {
+            "records_sent": sent,
+            "records_delivered_http": len(delivered),
+            "http_requests": state["requests"],
+            "http_rejections": state["rejected"],
+        }
+    )
+    ctx.check("server errors were injected", state["rejected"] > 0)
+    ctx.check(
+        "every record eventually reached the endpoint",
+        len(delivered) == sent,
+        f"delivered={len(delivered)} sent={sent}",
+    )
+    ctx.check(
+        "no record lost or duplicated by batch retries",
+        len(counts) == count_each and off_count == 0,
+        f"distinct={len(counts)} expected={count_each} "
+        f"off_count={off_count}",
+    )
+
+
+@scenario("chaos.topology_churn")
+async def topology_churn(ctx: Context) -> None:
+    """Handlers added and removed mid-stream: the stable one is whole."""
+    manager = ctx.new_manager()
+    stable = CollectorHandler(track=True)
+    logger = ctx.new_logger(manager)
+    logger.addHandler(stable)
+
+    producers = 2
+    count_each = ctx.n(2_000, 400)
+    churn_cycles = ctx.n(40, 10)
+    transient_received = 0
+
+    async def churner() -> None:
+        nonlocal transient_received
+        for _ in range(churn_cycles):
+            transient = CollectorHandler()
+            logger.addHandler(transient)
+            await asyncio.sleep(0.002)
+            logger.removeHandler(transient)
+            transient_received += transient.received
+            await asyncio.sleep(0)
+
+    producing = asyncio.gather(
+        produce_many(logger, producers, count_each), churner()
+    )
+    sent, _ = await producing
+    await manager.flush()
+
+    dropped = int(manager.get_metrics()["records_dropped"])
+    ctx.metrics.update(
+        {
+            "records_sent": sent,
+            "churn_cycles": churn_cycles,
+            "stable_received": stable.received,
+            "transient_received": transient_received,
+            "records_dropped": dropped,
+        }
+    )
+    ctx.check(
+        "the stable handler got every record",
+        stable.received == sent,
+        f"received={stable.received} sent={sent}",
+    )
+    ctx.check(
+        "transient handlers saw some records",
+        transient_received > 0,
+    )
+    ctx.check("nothing dropped", dropped == 0)
+    ctx.check(
+        "ordering preserved through the churn",
+        stable.ordered_per_producer(),
+    )
+
+
+@scenario("chaos.manager_reuse_after_shutdown")
+async def manager_reuse_after_shutdown(ctx: Context) -> None:
+    """shutdown() then logging again: the second generation works."""
+    manager = ctx.new_manager()
+    generations = ctx.n(5, 2)
+    count_each = ctx.n(500, 100)
+    results = []
+
+    for generation in range(generations):
+        sink = CollectorHandler(track=True)
+        logger = manager.getLogger(f"gen{generation}")
+        logger.setLevel("INFO")
+        logger.propagate = False
+        logger.addHandler(sink)
+        sent = await produce_many(logger, 2, count_each)
+        await manager.flush()
+        results.append((sink.received, sent))
+        await manager.shutdown(timeout=10.0)
+        pristine = (
+            manager.undelivered() == 0 and not manager.loggerDict
+        )
+        results[-1] += (pristine,)
+
+    ctx.metrics.update(
+        {
+            "generations": generations,
+            "records_each": 2 * count_each,
+        }
+    )
+    ctx.check(
+        "every generation delivered everything",
+        all(received == sent for received, sent, _ in results),
+        str([(r, s) for r, s, _ in results]),
+    )
+    ctx.check(
+        "the manager is pristine after every shutdown",
+        all(pristine for _, _, pristine in results),
     )
 
 

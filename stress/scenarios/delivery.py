@@ -694,9 +694,12 @@ async def drop_policy_errors_survive(ctx: Context) -> None:
     """D3: under overload every ERROR survives, only INFO is shed."""
     from aiologging.logger import LevelAwareDrop
 
-    manager = ctx.new_manager(queue_size=200, overflow="drop_old")
-    manager.drop_policy = LevelAwareDrop(
-        discard_below=logging.WARNING, watermark=0.7
+    manager = ctx.new_manager(
+        queue_size=200,
+        overflow="drop_old",
+        drop_policy=LevelAwareDrop(
+            discard_below=logging.WARNING, watermark=0.7
+        ),
     )
     sink = CollectorHandler(delay=_SLOW, track=True)
     logger = ctx.new_logger(manager)
@@ -758,9 +761,12 @@ async def drop_policy_drop_new(ctx: Context) -> None:
     """D3: the policy protects ERRORs over drop_new as well."""
     from aiologging.logger import LevelAwareDrop
 
-    manager = ctx.new_manager(queue_size=200, overflow="drop_new")
-    manager.drop_policy = LevelAwareDrop(
-        discard_below=logging.WARNING, watermark=0.7
+    manager = ctx.new_manager(
+        queue_size=200,
+        overflow="drop_new",
+        drop_policy=LevelAwareDrop(
+            discard_below=logging.WARNING, watermark=0.7
+        ),
     )
     sink = CollectorHandler(delay=_SLOW, track=True)
     logger = ctx.new_logger(manager)
@@ -822,9 +828,12 @@ async def drop_policy_bridge_threads(ctx: Context) -> None:
     """D3: thread producers via the bridge: ERRORs still survive."""
     from aiologging.logger import LevelAwareDrop
 
-    manager = ctx.new_manager(queue_size=200, overflow="drop_old")
-    manager.drop_policy = LevelAwareDrop(
-        discard_below=logging.WARNING, watermark=0.7
+    manager = ctx.new_manager(
+        queue_size=200,
+        overflow="drop_old",
+        drop_policy=LevelAwareDrop(
+            discard_below=logging.WARNING, watermark=0.7
+        ),
     )
     sink = CollectorHandler(delay=_SLOW, track=True)
     bridge_root = manager.getLogger("bridge")
