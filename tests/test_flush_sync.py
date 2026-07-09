@@ -54,6 +54,42 @@ class TestFlushSync:
         assert handler.messages == ["Service crashed"]
         asyncio.run(manager.shutdown())
 
+    def test_full_queues_and_in_flight_survive_loop_death(self) -> None:
+        """
+        Regression: with the main and dispatch queues both full and
+        records in flight when the loop died, the drain used to lose
+        exactly the in-flight records — draining the dead queue via
+        get_nowait woke dead-loop putters (RuntimeError mid-rescue)
+        and the teardown RuntimeError was mistaken for a handler
+        failure, discarding the in-flight record unaccounted.
+        """
+
+        class SlowRecorder(RecordingHandler):
+            async def _emit(self, record: Any, msg: str) -> None:
+                await asyncio.sleep(0.002)
+                await super()._emit(record, msg)
+
+        manager = AsyncLoggerManager(queue_size=50, overflow="block")
+        handler = SlowRecorder()
+        logger = manager.getLogger("app")
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+        count = 120  # far beyond queue_size: both queues end up full
+
+        async def produce() -> None:
+            for i in range(count):
+                await logger.info("msg %d", i)
+
+        asyncio.run(produce())
+
+        assert manager.flush_sync(timeout=30.0) is True
+        delivered = set(handler.messages)
+        expected = {f"msg {i}" for i in range(count)}
+        assert expected - delivered == set()
+        # rescue may redeliver the in-flight records, nothing more
+        assert len(handler.messages) - len(delivered) <= 2
+        asyncio.run(manager.shutdown())
+
     def test_delivers_buffered_http_records_without_a_loop(self) -> None:
         """The pager case: the record sits in the HTTP handler buffer."""
         requests: List[httpx.Request] = []

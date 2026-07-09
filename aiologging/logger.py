@@ -98,6 +98,31 @@ _INLINE_HANDLED_ATTR = "_aiologging_inline_handled"
 _exception_formatter = logging.Formatter()
 
 
+def _drain_dead_queue(queue: "asyncio.Queue[Any]") -> "List[Any]":
+    """
+    Take every item out of a queue that may belong to a dead loop.
+
+    ``get_nowait`` cannot be used for this: it wakes the queue's
+    pending putters, and waking a putter future bound to a closed
+    loop raises ``RuntimeError`` mid-drain — aborting the rescue and
+    losing records. Read the internal deque directly instead; the
+    queue object is discarded right after, so its waiter bookkeeping
+    no longer matters.
+    """
+    internal = getattr(queue, "_queue", None)
+    if internal is None:  # pragma: no cover - non-CPython fallback
+        items: List[Any] = []
+        try:
+            while True:
+                items.append(queue.get_nowait())
+        except (asyncio.QueueEmpty, RuntimeError):
+            pass
+        return items
+    drained = list(internal)
+    internal.clear()
+    return drained
+
+
 def _close_unstarted_task(task: "Optional[asyncio.Task[None]]") -> None:
     """
     Close the coroutine of a task stranded on a closed event loop.
@@ -819,9 +844,11 @@ class _HandlerDispatcher:
         self._queue: Optional[asyncio.Queue[_DispatchItem]] = None
         self._task: Optional[asyncio.Task[None]] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._pending: Deque[_DispatchItem] = deque(
-            maxlen=manager.queue_size
-        )
+        # Unbounded on purpose: it only ever holds what the rescue
+        # moves out of the old queue (≤ queue_size + the in-flight
+        # item). A maxlen here silently evicted the in-flight item
+        # when the rescued queue was full — an unaccounted loss.
+        self._pending: Deque[_DispatchItem] = deque()
         self._in_flight: Optional[_DispatchItem] = None
 
     def running(self) -> bool:
@@ -853,20 +880,23 @@ class _HandlerDispatcher:
             if self._in_flight is not None:
                 self._pending.appendleft(self._in_flight)
                 self._in_flight = None
-            try:
-                while True:
-                    self._pending.append(self._queue.get_nowait())
-            except asyncio.QueueEmpty:
-                pass
+            self._pending.extend(_drain_dead_queue(self._queue))
 
         self._loop = loop
-        self._queue = asyncio.Queue(maxsize=self._manager.queue_size)
+        # A rescue can carry queue_size + 1 items (the full old queue
+        # plus the in-flight one); size the new queue to fit them all
+        # so nothing is lost. Producers still block/shed against the
+        # nominal size, and the surplus drains right away.
+        maxsize = self._manager.queue_size
+        if maxsize:
+            maxsize = max(maxsize, len(self._pending))
+        self._queue = asyncio.Queue(maxsize=maxsize)
 
         while self._pending:
             item = self._pending.popleft()
             try:
                 self._queue.put_nowait(item)
-            except asyncio.QueueFull:  # pragma: no cover - same maxlen
+            except asyncio.QueueFull:  # pragma: no cover - sized above
                 self._manager._drop(item[0])
                 item[2].done_one()
 
@@ -939,25 +969,32 @@ class _HandlerDispatcher:
                     queue.task_done()
                     continue
                 self._in_flight = item
-                interrupted = False
+                # _in_flight is cleared only on the completion paths:
+                # any BaseException (CancelledError on teardown,
+                # GeneratorExit when a dead loop's task is
+                # GC-finalized) must leave the item in _in_flight so
+                # a rebuilt worker can rescue and redeliver it.
                 try:
                     await self._handler.handle(record)
                 except asyncio.CancelledError:
-                    # Dispatch interrupted (loop teardown): leave the
-                    # item in _in_flight so a rebuilt worker can
-                    # rescue and redeliver it
-                    interrupted = True
                     raise
                 except Exception as e:
+                    if loop.is_closed():
+                        # Teardown, not a handler failure: our loop
+                        # died mid-emit and its artifacts raised.
+                        # Keep the item for the rebuilt worker.
+                        raise
                     sys.stderr.write(
                         f"Error in handler "
                         f"{type(self._handler).__name__}: {e}\n"
                         f"Record: {record.getMessage()}\n"
                     )
+                    self._in_flight = None
+                    completion.done_one()
+                else:
+                    self._in_flight = None
+                    completion.done_one()
                 finally:
-                    if not interrupted:
-                        self._in_flight = None
-                        completion.done_one()
                     queue.task_done()
         except RuntimeError:
             # Our loop died under us: the coroutine is being
@@ -1042,11 +1079,13 @@ class AsyncLoggerManager:
         self._consumer_task: Optional[asyncio.Task[None]] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         # Records that arrived while no event loop was available (e.g.
-        # from the stdlib bridge before the app started); drained into
-        # the queue when the consumer starts
-        self._pending: Deque[Tuple[AsyncLogger, LogRecord]] = deque(
-            maxlen=queue_size
-        )
+        # from the stdlib bridge before the app started) and records
+        # rescued from a dead loop's queue; drained into the queue
+        # when the consumer starts. Unbounded: the cold-start path
+        # enforces the queue_size bound itself (with drop accounting),
+        # and a rescue never holds more than the old queue plus the
+        # in-flight record.
+        self._pending: Deque[Tuple[AsyncLogger, LogRecord]] = deque()
         # The record the consumer is currently dispatching; rescued
         # together with the queue when the event loop changes
         self._in_flight: Optional[Tuple[AsyncLogger, LogRecord]] = None
@@ -1269,7 +1308,15 @@ class AsyncLoggerManager:
         elif running is not None:
             self._put_nowait_sync(logger, record)
         else:
-            # No loop anywhere yet — buffer until the consumer starts
+            # No loop anywhere yet — buffer until the consumer starts,
+            # holding at most queue_size cold records (the oldest are
+            # dropped with accounting, mirroring drop_old)
+            while len(self._pending) >= self.queue_size > 0:
+                try:
+                    old_logger, _ = self._pending.popleft()
+                except IndexError:  # pragma: no cover - racing thread
+                    break
+                self._drop(old_logger)
             self._pending.append((logger, record))
 
     def _put_nowait_sync(
@@ -1319,21 +1366,24 @@ class AsyncLoggerManager:
             if self._in_flight is not None:
                 self._pending.appendleft(self._in_flight)
                 self._in_flight = None
-            try:
-                while True:
-                    old_logger, old_record, _ = self._queue.get_nowait()
-                    self._pending.append((old_logger, old_record))
-            except asyncio.QueueEmpty:
-                pass
+            for old_logger, old_record, _ in _drain_dead_queue(
+                self._queue
+            ):
+                self._pending.append((old_logger, old_record))
 
         self._loop = loop
-        self._queue = asyncio.Queue(maxsize=self.queue_size)
+        # Size the new queue to fit the whole rescue (the full old
+        # queue plus the in-flight record); see _HandlerDispatcher.
+        maxsize = self.queue_size
+        if maxsize:
+            maxsize = max(maxsize, len(self._pending))
+        self._queue = asyncio.Queue(maxsize=maxsize)
 
         while self._pending:
             pending_logger, pending_record = self._pending.popleft()
             try:
                 self._queue.put_nowait((pending_logger, pending_record, None))
-            except asyncio.QueueFull:  # pragma: no cover - same maxlen
+            except asyncio.QueueFull:  # pragma: no cover - sized above
                 self._drop(pending_logger)
 
         self._consumer_task = loop.create_task(
@@ -1348,16 +1398,21 @@ class AsyncLoggerManager:
             while True:
                 logger, record, fut = await queue.get()
                 self._in_flight = (logger, record)
-                interrupted = False
+                # _in_flight is cleared only on the completion paths:
+                # any BaseException (CancelledError on teardown,
+                # GeneratorExit when a dead loop's task is
+                # GC-finalized) must leave the record in _in_flight
+                # so a rebuilt consumer can rescue and redeliver it.
                 try:
                     await self._dispatch(logger, record, fut)
                 except asyncio.CancelledError:
-                    # Dispatch interrupted (loop teardown): leave the
-                    # record in _in_flight so a rebuilt consumer can
-                    # rescue and redeliver it
-                    interrupted = True
                     raise
                 except Exception as e:
+                    if loop.is_closed():
+                        # Teardown, not a dispatch failure: our loop
+                        # died mid-dispatch and its artifacts raised.
+                        # Keep the record for the rebuilt consumer.
+                        raise
                     logger._metrics.increment_errors()
                     sys.stderr.write(
                         f"Error in logger {logger.name}: {e}\n"
@@ -1366,9 +1421,10 @@ class AsyncLoggerManager:
                     # producer awaiting delivery
                     if fut is not None and not fut.done():
                         fut.set_result(None)
+                    self._in_flight = None
+                else:
+                    self._in_flight = None
                 finally:
-                    if not interrupted:
-                        self._in_flight = None
                     queue.task_done()
         except RuntimeError:
             # Our loop died under us: the coroutine is being
