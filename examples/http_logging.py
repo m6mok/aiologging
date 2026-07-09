@@ -22,13 +22,17 @@ import aiologging
 from aiologging.types import BatchConfig
 
 
+received = []
+
+
 async def collector(request: web.Request) -> web.Response:
     """Pretend to be a log collection endpoint."""
     payload = await request.json()
     auth = request.headers.get("Authorization", "<missing>")
     print(f"[collector] auth={auth} received {len(payload)} record(s)")
     for record in payload:
-        print(f"[collector]   {record['levelname']}: {record['message']}")
+        print(f"[collector]   {record['level']}: {record['message']}")
+        received.append(record["message"])
     return web.Response(text="ok")
 
 
@@ -67,6 +71,7 @@ async def main() -> None:
         # shutdown() drains the queue and flushes the remaining batch
         await aiologging.shutdown()
         await asyncio.sleep(0.2)
+        assert len(received) == 12, f"delivered {len(received)}/12"
     finally:
         await runner.cleanup()
 
