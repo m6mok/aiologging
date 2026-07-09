@@ -29,6 +29,15 @@ from .types import (
 )
 from .utils import handle_error_with_fallback
 
+# Accepted forms of the ``exc_info`` argument, mirroring standard logging
+ExcInfoType = Union[
+    bool,
+    BaseException,
+    "tuple[type[BaseException], BaseException, Optional[TracebackType]]",
+    "tuple[None, None, None]",
+    None,
+]
+
 
 class AsyncLoggerMetrics:
     """Metrics collection for async loggers."""
@@ -87,10 +96,6 @@ class AsyncLogger:
         await logger.info("message")
     """
 
-    # Class-level configuration for better performance
-    _default_record_cache_size: int = 1000
-    _default_filter_cache_size: int = 1000
-
     def __init__(
         self,
         name: str,
@@ -100,8 +105,6 @@ class AsyncLogger:
         disabled: bool = False,
         rate_limiter: Optional[RateLimiter] = None,
         enable_metrics: bool = False,
-        record_cache_size: Optional[int] = None,
-        filter_cache_size: Optional[int] = None,
         error_handler: Optional[AsyncErrorHandler] = None,
     ) -> None:
         """
@@ -115,8 +118,6 @@ class AsyncLogger:
             disabled: Whether the logger is disabled
             rate_limiter: Optional rate limiter for the logger
             enable_metrics: Enable performance metrics collection
-            record_cache_size: Size of the record cache for optimization
-            filter_cache_size: Size of the filter cache for optimization
             error_handler: Optional error handler for logging errors
         """
         self.name = name
@@ -126,12 +127,6 @@ class AsyncLogger:
         self.disabled = disabled
         self._rate_limiter = rate_limiter
         self._enable_metrics = enable_metrics
-        self._record_cache_size = (
-            record_cache_size or self._default_record_cache_size
-        )
-        self._filter_cache_size = (
-            filter_cache_size or self._default_filter_cache_size
-        )
         self._error_handler = error_handler
 
         self._parent: Optional[AsyncLogger] = None
@@ -141,10 +136,6 @@ class AsyncLogger:
         self._lock = asyncio.Lock()
         self._closed = False
 
-        # Performance optimizations
-        self._record_cache: dict[int, LogRecord] = {}
-        self._filter_cache: dict[int, bool] = {}
-
         # Metrics collection
         self._metrics = AsyncLoggerMetrics(enable_metrics)
 
@@ -152,9 +143,8 @@ class AsyncLogger:
         self._handlers_refs: WeakSet[AsyncHandler] = WeakSet(self.handlers)
 
     def setLevel(self, level: int) -> None:
-        """Set the logging level for this logger and clear caches."""
+        """Set the logging level for this logger."""
         self.level = level
-        self._filter_cache.clear()
 
     def getLevel(self) -> int:
         """Get the effective logging level for this logger."""
@@ -181,25 +171,21 @@ class AsyncLogger:
         if handler not in self.handlers:
             self.handlers.append(handler)
             self._handlers_refs.add(handler)
-            self._filter_cache.clear()
 
     def removeHandler(self, handler: AsyncHandler) -> None:
-        """Remove an async handler from this logger and clear caches."""
+        """Remove an async handler from this logger."""
         if handler in self.handlers:
             self.handlers.remove(handler)
-            self._filter_cache.clear()
 
     def addFilter(self, filter: FilterProtocol) -> None:
-        """Add a filter to this logger and clear cache."""
+        """Add a filter to this logger."""
         if filter not in self._filters:
             self._filters.append(filter)
-            self._filter_cache.clear()
 
     def removeFilter(self, filter: FilterProtocol) -> None:
-        """Remove a filter from this logger and clear cache."""
+        """Remove a filter from this logger."""
         if filter in self._filters:
             self._filters.remove(filter)
-            self._filter_cache.clear()
 
     def setFormatter(self, formatter: FormatterProtocol) -> None:
         """Set the formatter for this logger."""
@@ -239,15 +225,7 @@ class AsyncLogger:
         level: int,
         msg: str,
         *args: Any,
-        exc_info: Optional[
-            Union[
-                bool,
-                tuple[
-                    type[BaseException], BaseException, Optional[TracebackType]
-                ],
-                tuple[None, None, None],
-            ]
-        ] = None,
+        exc_info: ExcInfoType = None,
         extra: Optional[Dict[str, Any]] = None,
         stack_info: bool = False,
     ) -> None:
@@ -327,21 +305,23 @@ class AsyncLogger:
         level: int,
         msg: str,
         args: tuple[Any, ...],
-        exc_info: Optional[
-            Union[
-                bool,
-                tuple[
-                    type[BaseException], BaseException, Optional[TracebackType]
-                ],
-                tuple[None, None, None],
-            ]
-        ],
+        exc_info: ExcInfoType,
         extra: Optional[Dict[str, Any]],
         stack_info: bool,
     ) -> LogRecord:
-        """Create a log record with caching for better performance."""
+        """Create a log record."""
         # Get caller information
         fn, lno, func = self._get_caller_info()
+
+        # Normalize exc_info the same way the standard logging module does:
+        # True means "use the current exception", an exception instance
+        # is expanded into an (type, value, traceback) tuple
+        if isinstance(exc_info, BaseException):
+            exc_info = (type(exc_info), exc_info, exc_info.__traceback__)
+        elif exc_info is True:
+            exc_info = sys.exc_info()
+        elif not exc_info:
+            exc_info = None
 
         # Create the record
         record = logging.LogRecord(
@@ -361,9 +341,6 @@ class AsyncLogger:
         # Add stack info if requested
         if stack_info:
             record.stack_info = self._format_stack(logging.currentframe())
-
-        # Cache the record
-        self._cache_record(record)
 
         self._metrics.increment_created()
         return record
@@ -419,14 +396,6 @@ class AsyncLogger:
                 raise KeyError(f"Attempt to overwrite {key!r} in LogRecord")
             setattr(record, key, value)
 
-    def _cache_record(self, record: LogRecord) -> None:
-        """Cache the log record for better performance."""
-        record_id = id(record)
-        if len(self._record_cache) >= self._record_cache_size:
-            # Clear oldest entries
-            self._record_cache.clear()
-        self._record_cache[record_id] = record
-
     def _format_stack(self, frame: Any) -> str:
         """Format the stack information."""
         import traceback
@@ -449,7 +418,7 @@ class AsyncLogger:
             )
 
         async with self._lock:
-            # Apply filters with caching
+            # Apply filters
             if not self._filter(record):
                 return
 
@@ -460,8 +429,13 @@ class AsyncLogger:
             # Pass to handlers with enhanced error handling
             await self._handle_with_handlers(record)
 
-            # Propagate to parent if enabled
-            if self.propagateToParent() and self._parent is not None:
+            # Propagate to parent if enabled (skip closed parents the same
+            # way log() silently drops records on a closed logger)
+            if (
+                self.propagateToParent()
+                and self._parent is not None
+                and not self._parent._closed
+            ):
                 await self._parent.handle(record)
 
     async def _handle_with_handlers(self, record: LogRecord) -> None:
@@ -497,35 +471,18 @@ class AsyncLogger:
             handler.error_handler = self._error_handler
 
     def _filter(self, record: LogRecord) -> bool:
-        """
-        Apply all filters to a log record with caching for better performance.
-        """
-        # Use cache for filter results if enabled
-        record_id = id(record)
-        if record_id in self._filter_cache:
-            return self._filter_cache[record_id]
-
-        # Apply filters
-        result = True
+        """Apply all filters to a log record."""
         for filter_obj in self._filters:
             try:
                 if not filter_obj.filter(record):
-                    result = False
-                    break
+                    return False
             except Exception as e:
                 sys.stderr.write(
                     f"Filter error in {type(filter_obj).__name__}: {e}\n"
                 )
-                result = False
-                break
+                return False
 
-        # Cache the result
-        if len(self._filter_cache) >= self._filter_cache_size:
-            # Clear oldest entries
-            self._filter_cache.clear()
-        self._filter_cache[record_id] = result
-
-        return result
+        return True
 
     async def _handle_error(self, record: LogRecord, error: Exception) -> None:
         """
@@ -567,10 +524,8 @@ class AsyncLogger:
                         f"Error closing child logger {child.name}: {e}\n"
                     )
 
-        # Clean up references and caches
+        # Clean up references
         self._handlers_refs.clear()
-        self._record_cache.clear()
-        self._filter_cache.clear()
 
     def get_metrics(self) -> dict[str, Union[int, float, bool]]:
         """
@@ -582,8 +537,6 @@ class AsyncLogger:
         metrics = self._metrics.get_metrics()
         metrics.update(
             {
-                "record_cache_size": len(self._record_cache),
-                "filter_cache_size": len(self._filter_cache),
                 "handlers_count": len(self.handlers),
                 "filters_count": len(self._filters),
                 "children_count": len(self._children),

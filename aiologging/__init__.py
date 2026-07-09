@@ -99,8 +99,7 @@ NOTSET = logging.NOTSET
 
 # Version information
 __version__ = "0.1.0"
-__author__ = "Aiologging Contributors"
-__email__ = "contributors@aiologging.dev"
+__author__ = "Evgenii Dementev (m6mok)"
 __license__ = "MIT"
 
 # Public API
@@ -113,6 +112,11 @@ __all__ = [
     "getRootLogger",
     "log_async",
     "shutdown",
+    "basicConfig",
+    # Convenience factories
+    "create_stream_handler",
+    "create_file_handler",
+    "create_http_handler",
     # Base handlers
     "AsyncHandler",
     "AsyncStreamHandler",
@@ -174,7 +178,6 @@ __all__ = [
     # Version info
     "__version__",
     "__author__",
-    "__email__",
     "__license__",
 ]
 

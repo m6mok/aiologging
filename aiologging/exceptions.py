@@ -91,8 +91,9 @@ class AiologgingError(Exception):
         super().__init__(message)
         self.message = message
 
-        # Merge kwargs with details for more flexible initialization
-        merged_details = details or {}
+        # Merge kwargs with details for more flexible initialization;
+        # copy to avoid mutating the caller's dictionary
+        merged_details = dict(details) if details else {}
         merged_details.update(kwargs)
         self.details = merged_details
 

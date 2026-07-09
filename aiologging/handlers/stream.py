@@ -8,6 +8,7 @@ like stdout, stderr, or any file-like stream.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import sys
 from logging import LogRecord, NOTSET
 from typing import Optional, TextIO, Union, Protocol, runtime_checkable
@@ -111,21 +112,26 @@ class AsyncStreamHandler(AsyncHandler):
                 if self._is_async_stream and isinstance(
                     stream, AsyncStreamWriter
                 ):
-                    # Handle asyncio.StreamWriter
-                    msg_bytes = (
-                        msg.encode(self.encoding, self.errors)
-                        if isinstance(msg, str)
-                        else msg
-                    )
+                    # Handle asyncio.StreamWriter-like objects. On a real
+                    # asyncio.StreamWriter ``write()`` is synchronous, while
+                    # custom async writers may return an awaitable.
+                    msg_bytes = msg.encode(self.encoding, self.errors)
 
-                    await stream.write(msg_bytes)
+                    write_result = stream.write(msg_bytes)
+                    if inspect.isawaitable(write_result):
+                        await write_result
                     await stream.drain()
-                elif isinstance(stream, AsyncTextWriter):
-                    # Handle async text writer
+                elif isinstance(
+                    stream, AsyncTextWriter
+                ) and inspect.iscoroutinefunction(stream.write):
+                    # Handle async text writer. The protocol isinstance
+                    # check only verifies the method exists, so make sure
+                    # write() is actually a coroutine function - sync
+                    # streams like StringIO must fall through below.
                     await stream.write(msg)
                 elif isinstance(stream, SyncWriter):
                     # Handle sync writer - run in thread pool
-                    loop = asyncio.get_event_loop()
+                    loop = asyncio.get_running_loop()
                     await loop.run_in_executor(None, stream.write, msg)
 
                     # Flush if the stream has a flush method
@@ -153,13 +159,22 @@ class AsyncStreamHandler(AsyncHandler):
 
     async def _close_resources(self) -> None:
         """Close the stream if it supports closing."""
+        # Never close the interpreter-wide standard streams
+        if self.stream in (
+            sys.stdout,
+            sys.stderr,
+            sys.__stdout__,
+            sys.__stderr__,
+        ):
+            return
+
         if hasattr(self.stream, "close"):
             try:
                 if asyncio.iscoroutinefunction(self.stream.close):
                     await self.stream.close()
                 else:
                     # For sync close, run in thread pool
-                    loop = asyncio.get_event_loop()
+                    loop = asyncio.get_running_loop()
                     await loop.run_in_executor(None, self.stream.close)
             except Exception as e:
                 # Log the error but don't raise it during cleanup

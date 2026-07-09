@@ -75,7 +75,6 @@ class AsyncHandler(AsyncHandlerABC):
     # Class-level configuration for better performance
     _default_retry_attempts: int = 3
     _default_retry_delay: float = 0.1
-    _default_filter_cache_size: int = 1000
 
     def __init__(
         self,
@@ -115,10 +114,6 @@ class AsyncHandler(AsyncHandlerABC):
         self._closed = False
         self._lock = asyncio.Lock()
 
-        # Performance optimizations
-        self._filter_cache: dict[int, bool] = {}
-        self._filter_cache_size = self._default_filter_cache_size
-
         # Metrics collection
         self._metrics = AsyncHandlerMetrics(enable_metrics)
 
@@ -126,20 +121,17 @@ class AsyncHandler(AsyncHandlerABC):
         self._loggers: WeakSet[Any] = WeakSet()
 
     def setLevel(self, level: int) -> None:
-        """Set the logging level for this handler and clear filter cache."""
+        """Set the logging level for this handler."""
         self.level = level
-        self._filter_cache.clear()
 
     def addFilter(self, filter: FilterProtocol) -> None:
-        """Add a filter to this handler and clear cache."""
+        """Add a filter to this handler."""
         self.filters.append(filter)
-        self._filter_cache.clear()
 
     def removeFilter(self, filter: FilterProtocol) -> None:
-        """Remove a filter from this handler and clear cache."""
+        """Remove a filter from this handler."""
         if filter in self.filters:
             self.filters.remove(filter)
-            self._filter_cache.clear()
 
     def setFormatter(self, formatter: FormatterProtocol) -> None:
         """Set the formatter for this handler."""
@@ -176,7 +168,7 @@ class AsyncHandler(AsyncHandlerABC):
 
     def filter(self, record: LogRecord) -> bool:
         """
-        Apply all filters to a log record with caching for better performance.
+        Apply all filters to a log record.
 
         Args:
             record: The log record to filter
@@ -188,33 +180,18 @@ class AsyncHandler(AsyncHandlerABC):
         if record.levelno < self.level:
             return False
 
-        # Use cache for filter results if enabled
-        record_id = id(record)
-        if record_id in self._filter_cache:
-            return self._filter_cache[record_id]
-
-        # Apply filters
-        result = True
         for filter_obj in self.filters:
             try:
                 if not filter_obj.filter(record):
-                    result = False
-                    break
+                    return False
             except Exception as e:
-                # Log filter error but continue processing
+                # A failing filter drops the record to stay on the safe side
                 sys.stderr.write(
                     f"Filter error in {type(filter_obj).__name__}: {e}\n"
                 )
-                result = False
-                break
+                return False
 
-        # Cache the result
-        if len(self._filter_cache) >= self._filter_cache_size:
-            # Clear oldest entries
-            self._filter_cache.clear()
-        self._filter_cache[record_id] = result
-
-        return result
+        return True
 
     def isEnabledFor(self, level: int) -> bool:
         """
@@ -375,9 +352,8 @@ class AsyncHandler(AsyncHandlerABC):
                 self._closed = True
                 await self._close_resources()
 
-        # Clean up references and caches
+        # Clean up references
         self._loggers.clear()
-        self._filter_cache.clear()
 
     async def _close_resources(self) -> None:
         """
@@ -396,12 +372,7 @@ class AsyncHandler(AsyncHandlerABC):
             Dictionary containing performance metrics.
         """
         metrics = self._metrics.get_metrics()
-        metrics.update(
-            {
-                "filter_cache_size": len(self._filter_cache),
-                "closed": self._closed,
-            }
-        )
+        metrics.update({"closed": self._closed})
         return metrics
 
     def __repr__(self) -> str:

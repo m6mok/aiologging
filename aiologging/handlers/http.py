@@ -142,7 +142,7 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
                 if self._session is None or self._session.closed:
                     timeout = ClientTimeout(total=self.timeout)
                     connector = aiohttp.TCPConnector(
-                        verify_ssl=self.verify_ssl,
+                        ssl=self.verify_ssl,
                     )
                     self._session = ClientSession(
                         timeout=timeout,

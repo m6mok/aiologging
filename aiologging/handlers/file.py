@@ -182,9 +182,9 @@ class AsyncFileHandler(AsyncHandler):
             HandlerError: If writing to the file fails
         """
         try:
-            # Ensure file is open
-            if self.delay:
-                await self._ensure_file_open()
+            # Ensure file is open (covers delayed opening and the case
+            # where the open task scheduled in __init__ has not run yet)
+            await self._ensure_file_open()
 
             if self._file is None:
                 raise HandlerError(
