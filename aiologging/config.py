@@ -18,6 +18,7 @@ from .handlers.base import AsyncHandler
 from .handlers.stream import AsyncStreamHandler
 from .handlers.file import AsyncFileHandler
 from .handlers.http import AsyncHttpHandler, AsyncHttpJsonHandler
+from .handlers.telegram import AsyncTelegramHandler
 from .handlers.rotating import (
     AsyncRotatingFileHandler,
     AsyncTimedRotatingFileHandler,
@@ -54,6 +55,7 @@ class ConfigManager:
             "file": AsyncFileHandler,
             "http": AsyncHttpHandler,
             "http_json": AsyncHttpJsonHandler,
+            "telegram": AsyncTelegramHandler,
             "rotating_file": AsyncRotatingFileHandler,
             "timed_rotating_file": AsyncTimedRotatingFileHandler,
         }
@@ -326,6 +328,8 @@ class ConfigManager:
             return self._create_http_handler(handler_config, level)
         elif handler_type == "http_json":
             return self._create_http_json_handler(handler_config, level)
+        elif handler_type == "telegram":
+            return self._create_telegram_handler(handler_config, level)
         elif handler_type == "rotating_file":
             return self._create_rotating_file_handler(handler_config, level)
         elif handler_type == "timed_rotating_file":
@@ -392,6 +396,38 @@ class ConfigManager:
             method=config.get("method", "POST"),
             headers=config.get("headers"),
             params=config.get("params"),
+            timeout=config.get("timeout", 30.0),
+            verify_ssl=config.get("verify_ssl", True),
+            level=level,
+            backend=config.get("backend"),
+        )
+
+    def _create_telegram_handler(
+        self, config: Dict[str, Any], level: int
+    ) -> AsyncTelegramHandler:
+        """Create a Telegram handler from configuration."""
+        token = config.get("token")
+        if not token:
+            raise ConfigurationError(
+                "Telegram handler must specify a token"
+            )
+        chat_id = config.get("chat_id")
+        if chat_id is None:
+            raise ConfigurationError(
+                "Telegram handler must specify a chat_id"
+            )
+
+        return AsyncTelegramHandler(
+            token=token,
+            chat_id=chat_id,
+            parse_mode=config.get("parse_mode"),
+            disable_notification=config.get(
+                "disable_notification", False
+            ),
+            message_thread_id=config.get("message_thread_id"),
+            api_base_url=config.get(
+                "api_base_url", "https://api.telegram.org"
+            ),
             timeout=config.get("timeout", 30.0),
             verify_ssl=config.get("verify_ssl", True),
             level=level,

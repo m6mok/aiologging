@@ -107,6 +107,7 @@ from .handlers import (
     AsyncHttpJsonHandler,
     AsyncHttpProtoHandler,
     AsyncHttpHandler,
+    AsyncTelegramHandler,
 )
 
 # Re-export logging levels for compatibility
@@ -120,7 +121,7 @@ DEBUG = logging.DEBUG
 NOTSET = logging.NOTSET
 
 # Version information
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 __author__ = "Evgenii Dementev (m6mok)"
 __license__ = "MIT"
 
@@ -154,6 +155,7 @@ __all__ = [
     "create_stream_handler",
     "create_file_handler",
     "create_http_handler",
+    "create_telegram_handler",
     # Base handlers
     "AsyncHandler",
     "AsyncStreamHandler",
@@ -168,6 +170,7 @@ __all__ = [
     "AsyncHttpJsonHandler",
     "AsyncHttpProtoHandler",
     "AsyncHttpHandler",
+    "AsyncTelegramHandler",
     # Configuration management
     "ConfigManager",
     "get_config_manager",
@@ -304,6 +307,45 @@ def create_http_handler(
         level=level,
         formatter=formatter,
         authenticator=authenticator,
+        backend=backend,
+    )
+
+
+def create_telegram_handler(
+    token: str,
+    chat_id: Union[str, int],
+    parse_mode: Optional[str] = None,
+    level: int = NOTSET,
+    formatter: Optional[FormatterProtocol] = None,
+    backend: Optional[HttpBackendType] = None,
+) -> AsyncTelegramHandler:
+    """
+    Create an async Telegram handler.
+
+    Args:
+        token: The bot token from @BotFather
+        chat_id: Target chat: unique identifier or "@channelname"
+        parse_mode: Message formatting mode ("HTML", "Markdown",
+                    "MarkdownV2"); plain text if None
+        level: The logging level for this handler
+        formatter: The formatter to use for log records
+        backend: HTTP client backend to use ('aiohttp' or 'httpx');
+                 if None, aiohttp is used when installed,
+                 falling back to httpx
+
+    Returns:
+        An AsyncTelegramHandler instance
+
+    Raises:
+        ConfigurationError: If token or chat_id is invalid
+        DependencyError: If neither aiohttp nor httpx is installed
+    """
+    return AsyncTelegramHandler(
+        token,
+        chat_id,
+        parse_mode=parse_mode,
+        level=level,
+        formatter=formatter,
         backend=backend,
     )
 

@@ -340,6 +340,40 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
         """
         raise NotImplementedError
 
+    def _redacted_url(self) -> str:
+        """
+        Get the URL as it may be shown in error messages and repr.
+
+        Subclasses whose URL embeds a secret (e.g. a bot token)
+        should override this to hide it.
+
+        Returns:
+            The URL safe for display
+        """
+        return self.url
+
+    def _retry_delay_from_response(
+        self, status: int, error_text: str
+    ) -> Optional[float]:
+        """
+        Extract a server-provided retry delay from an error response.
+
+        Called for every error response (status >= 400) before the
+        retry decision is made. Returning a delay in seconds forces a
+        retry after that delay — even for 4xx statuses that are
+        otherwise not retried (e.g. 429 Too Many Requests). Returning
+        None keeps the default policy: exponential backoff for 5xx,
+        no retries for 4xx.
+
+        Args:
+            status: The HTTP status code of the response
+            error_text: The response body as text
+
+        Returns:
+            The delay in seconds before the next attempt, or None
+        """
+        return None
+
     async def flush(self, records: Optional[List[LogRecord]] = None) -> None:
         """
         Flush a batch of log records to the HTTP endpoint.
@@ -385,7 +419,7 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
             else:
                 raise NetworkError(
                     f"Failed to send log records: {e}",
-                    url=self.url,
+                    url=self._redacted_url(),
                     details={"record_count": len(records)},
                 ) from e
 
@@ -412,6 +446,7 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
         last_exception = None
 
         for attempt in range(self.batch_config.max_retries + 1):
+            retry_delay_override: Optional[float] = None
             try:
                 response = await self._make_single_request(
                     session, headers, request_data
@@ -426,32 +461,43 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
                         "HTTP request failed with status "
                         f"{response.status}: {error_text}"
                     ),
-                    url=self.url,
+                    url=self._redacted_url(),
                     status_code=response.status,
                     details={"attempt": attempt + 1},
                 )
 
+                # A server-provided delay (e.g. 429 with retry-after)
+                # forces a retry even for client errors
+                retry_delay_override = self._retry_delay_from_response(
+                    response.status, error_text
+                )
+
                 # Don't retry on client errors (4xx)
-                if 400 <= response.status < 500:
+                if (
+                    retry_delay_override is None
+                    and 400 <= response.status < 500
+                ):
                     break
 
             except Exception as e:
                 last_exception = NetworkError(
                     f"HTTP request failed: {e}",
-                    url=self.url,
+                    url=self._redacted_url(),
                     details={"attempt": attempt + 1},
                 )
 
             # Wait before retry (except on the last attempt)
             if attempt < self.batch_config.max_retries:
                 await asyncio.sleep(
-                    self.batch_config.retry_delay * (2**attempt)
+                    retry_delay_override
+                    if retry_delay_override is not None
+                    else self.batch_config.retry_delay * (2**attempt)
                 )
 
         # All retries failed
         raise last_exception or NetworkError(
             "HTTP request failed after all retries",
-            url=self.url,
+            url=self._redacted_url(),
             details={"record_count": len(records)},
         )
 
@@ -478,7 +524,7 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
             request_data if isinstance(request_data, (dict, list)) else None
         )
         raw_data = (
-            request_data if not isinstance(request_data, (dict, list)) else None
+            None if isinstance(request_data, (dict, list)) else request_data
         )
 
         if self.backend == "aiohttp":
@@ -515,7 +561,7 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
         if self.formatter:
             formatter = type(self.formatter).__name__
         return (
-            f"{self.__class__.__name__}(url='{self.url}', "
+            f"{self.__class__.__name__}(url='{self._redacted_url()}', "
             f"method='{self.method}', backend='{self.backend}', "
             f"level={self.level}, formatter={formatter})"
         )

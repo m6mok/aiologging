@@ -11,7 +11,7 @@ Asynchronous logging library for Python (3.9–3.14). The API mirrors the standa
 - **Configurable delivery**: `await` resolves on enqueue (default) or after handlers processed the record (`delivery="await"`)
 - **Configurable backpressure**: bounded queue with `block` (default), `drop_new` or `drop_old` overflow policies
 - **Stdlib bridge**: `captureStdlib()` routes third-party library logs (aiohttp, sqlalchemy, ...) through the same async handlers
-- **Async Handlers**: non-blocking I/O for streams, files (with size/time rotation) and HTTP endpoints with extensible authentication
+- **Async Handlers**: non-blocking I/O for streams, files (with size/time rotation), HTTP endpoints with extensible authentication, and Telegram chats
 - **Buffered Handlers**: batch processing for high-volume logging
 - **Performance Metrics**: built-in metrics for loggers, handlers and the queue
 - **Strict Type Checking**: full mypy support with type hints
@@ -119,6 +119,7 @@ Complete runnable examples live in the [examples/](examples/) directory:
 - [examples/stdlib_capture.py](examples/stdlib_capture.py) — routing third-party (stdlib `logging`) records through async handlers, including from threads and before the loop starts
 - [examples/file_logging.py](examples/file_logging.py) — file handler, size- and time-based rotation
 - [examples/http_logging.py](examples/http_logging.py) — JSON batches over HTTP with a custom authenticator (includes a local test collector)
+- [examples/telegram_logging.py](examples/telegram_logging.py) — sending records to a Telegram chat, including rate-limit handling (includes a local Bot API stand-in)
 - [examples/config_usage.py](examples/config_usage.py) — configuring loggers from a dictionary
 
 ## Handlers
@@ -201,6 +202,30 @@ http_handler = aiologging.AsyncHttpHandler(
     "https://api.example.com/logs",
     backend="httpx",  # or "aiohttp"
 )
+```
+
+### Telegram Handler (requires aiohttp or httpx)
+
+Sends log records to a Telegram chat via the Bot API. Buffered
+records are combined into as few `sendMessage` calls as possible,
+each within the 4096-character limit; a `429 Too Many Requests`
+response is retried after the delay the Bot API returns in
+`retry_after`.
+
+```python
+import aiologging
+
+async def main():
+    logger = aiologging.getLogger("app")
+    logger.addHandler(aiologging.AsyncTelegramHandler(
+        token="123456:ABC-DEF...",   # from @BotFather
+        chat_id="-1001234567890",    # or "@channelname"
+        level=aiologging.ERROR,
+        parse_mode=None,             # or "HTML" / "MarkdownV2"
+    ))
+
+    await logger.error("This will be sent to Telegram")
+    await aiologging.shutdown()
 ```
 
 ### Custom Authentication
