@@ -22,8 +22,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import re
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from ..metrics import wait_until
@@ -583,4 +588,178 @@ async def drop_policy_errors_survive(ctx: Context) -> None:
     )
     ctx.check(
         "delivered records stay ordered", sink.ordered_per_producer()
+    )
+
+
+# ----------------------------------------------------------------------
+# D1: atexit drain (subprocess — the hook only runs at interpreter
+# exit, so it cannot be exercised in-process)
+# ----------------------------------------------------------------------
+
+
+_ATEXIT_CHILD = """\
+import asyncio
+import sys
+
+import aiologging
+
+log_path = sys.argv[1]
+count = int(sys.argv[2])
+drain_timeout = float(sys.argv[3])
+
+aiologging.set_atexit_flush(drain_timeout)
+
+
+async def main() -> None:
+    logger = aiologging.getLogger("atexit_child")
+    logger.setLevel("INFO")
+    logger.propagate = False
+    logger.addHandler(aiologging.create_file_handler(log_path))
+    for seq in range(count):
+        await logger.info("record %d", seq)
+
+
+asyncio.run(main())
+# The loop is gone and shutdown() was never called; whatever is
+# still queued or buffered can only reach the file through the
+# atexit hook. Report the backlog size for the parent to verify.
+from aiologging.logger import _logger_manager
+
+sys.stdout.write("undelivered=%d\\n" % _logger_manager.undelivered())
+"""
+
+
+def _run_atexit_child(
+    ctx: Context, count: int, drain_timeout: float
+) -> Tuple["subprocess.CompletedProcess[str]", int, List[int]]:
+    """
+    Run the atexit child; returns (process, backlog reported by the
+    child at exit, seq numbers found in the log file).
+    """
+    import aiologging
+
+    script = ctx.tmpdir / "atexit_child.py"
+    script.write_text(_ATEXIT_CHILD, encoding="utf-8")
+    log_path = ctx.tmpdir / "atexit.log"
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(
+        Path(aiologging.__file__).resolve().parents[1]
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            str(log_path),
+            str(count),
+            str(drain_timeout),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=90.0,
+        env=env,
+        cwd=str(ctx.tmpdir),
+    )
+    backlog = -1
+    for line in proc.stdout.splitlines():
+        if line.startswith("undelivered="):
+            backlog = int(line.split("=", 1)[1])
+    text = (
+        log_path.read_text(encoding="utf-8")
+        if log_path.exists()
+        else ""
+    )
+    seqs = [
+        int(match.group(1))
+        for match in re.finditer(r"record (\d+)", text)
+    ]
+    return proc, backlog, seqs
+
+
+@scenario("delivery.atexit_drain", timeout=120.0)
+def atexit_drain(ctx: Context) -> None:
+    """D1: a process exiting without shutdown() loses nothing."""
+    try:
+        import aiofiles  # noqa: F401
+    except ImportError:
+        raise Skip("aiofiles not installed")
+
+    count = ctx.n(3_000, 500)
+    proc, backlog, seqs = _run_atexit_child(ctx, count, 10.0)
+    missing = set(range(count)) - set(seqs)
+    duplicates = len(seqs) - len(set(seqs))
+
+    ctx.metrics.update(
+        {
+            "records_sent": count,
+            "backlog_at_exit": backlog,
+            "lines_in_file": len(seqs),
+            "duplicates": duplicates,
+        }
+    )
+    ctx.check(
+        "child exited cleanly",
+        proc.returncode == 0,
+        f"rc={proc.returncode} stderr={proc.stderr[-300:]!r}",
+    )
+    ctx.check(
+        "there was a real backlog at exit",
+        backlog > 0,
+        f"backlog={backlog}",
+    )
+    ctx.check(
+        "the atexit drain delivered every record",
+        not missing,
+        f"missing={len(missing)}",
+    )
+    ctx.check(
+        "at most the in-flight records were duplicated",
+        duplicates <= 2,
+        f"duplicates={duplicates}",
+    )
+    ctx.check(
+        "no undelivered warning on stderr",
+        "never delivered" not in proc.stderr,
+    )
+
+
+@scenario("delivery.atexit_drain_disabled", timeout=120.0)
+def atexit_drain_disabled(ctx: Context) -> None:
+    """D1: set_atexit_flush(0) only warns, naming the exact backlog."""
+    try:
+        import aiofiles  # noqa: F401
+    except ImportError:
+        raise Skip("aiofiles not installed")
+
+    count = ctx.n(3_000, 500)
+    proc, backlog, seqs = _run_atexit_child(ctx, count, 0.0)
+    lost = count - len(set(seqs))
+
+    ctx.metrics.update(
+        {
+            "records_sent": count,
+            "backlog_at_exit": backlog,
+            "lines_in_file": len(seqs),
+            "records_lost": lost,
+        }
+    )
+    ctx.check(
+        "child exited cleanly",
+        proc.returncode == 0,
+        f"rc={proc.returncode} stderr={proc.stderr[-300:]!r}",
+    )
+    ctx.check(
+        "there was a real backlog at exit",
+        backlog > 0,
+        f"backlog={backlog}",
+    )
+    ctx.check(
+        "records were actually lost without the drain",
+        lost > 0,
+        f"lost={lost}",
+    )
+    ctx.check(
+        "the warning names the exact backlog",
+        f"aiologging: {backlog} log record(s) were never delivered"
+        in proc.stderr,
+        f"stderr={proc.stderr[-300:]!r}",
     )

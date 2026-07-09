@@ -80,6 +80,15 @@ dropped, lost or duplicated.
   must lose nothing; ≤ the in-flight records may be duplicated),
   `flush_sync` draining a backlog with no loop at all, and six
   threads flooding `enqueue_from_thread`.
+- **delivery** — the D1/D2/D3 delivery guarantees: `flush_sync`
+  across repeated loop churn, from foreign threads and with records
+  stuck in handler buffers; inline ERROR delivery through the bridge
+  (token-bucket bound, hanging sends, thread swarms — always
+  exactly-once overall); `LevelAwareDrop` shedding only low-severity
+  records under overload; and the atexit drain, exercised in a
+  subprocess (a process exiting without `shutdown()` must lose
+  nothing; with `set_atexit_flush(0)` it must warn with the exact
+  backlog).
 
 ## Adding a scenario
 

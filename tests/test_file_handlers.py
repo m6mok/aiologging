@@ -10,8 +10,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from aiologging.handlers.file import AsyncFileHandler
-from aiologging.exceptions import HandlerError
+from aiologging.handlers.file import AsyncFileHandler, _BlockingFileWrapper
+from aiologging.exceptions import FileError, HandlerError
 
 
 class TestAsyncFileHandler:
@@ -370,6 +370,87 @@ class TestAsyncFileHandler:
                 os.unlink(filename)
             if os.path.exists(dirname):
                 os.rmdir(dirname)
+
+
+class TestExecutorGoneFallback:
+    """
+    The atexit-drain path: once the interpreter shuts its executors
+    down, aiofiles cannot open or write files at all ("cannot
+    schedule new futures after interpreter shutdown"), so the handler
+    must fall back to blocking file I/O instead of losing records.
+    """
+
+    _EXECUTOR_GONE = RuntimeError(
+        "cannot schedule new futures after interpreter shutdown"
+    )
+
+    def _create_temp_file(self) -> str:
+        """Create a temporary file and return its name."""
+        temp_file = tempfile.NamedTemporaryFile(delete=False)
+        temp_file.close()
+        return temp_file.name
+
+    def _create_test_record(self) -> logging.LogRecord:
+        """Create a test log record."""
+        return logging.LogRecord(
+            name="test", level=logging.INFO, pathname="", lineno=0,
+            msg="Fallback message", args=(), exc_info=None
+        )
+
+    @pytest.mark.asyncio
+    async def test_emit_falls_back_to_blocking_io(self) -> None:
+        """Emit must still reach the file when executors are gone."""
+        filename = self._create_temp_file()
+        try:
+            handler = AsyncFileHandler(filename, delay=True)
+            record = self._create_test_record()
+
+            with patch(
+                "aiofiles.threadpool.open",
+                side_effect=self._EXECUTOR_GONE,
+            ):
+                await handler.emit(record)
+                await handler.close()
+
+            with open(filename, "r") as f:
+                assert "Fallback message" in f.read()
+        finally:
+            os.unlink(filename)
+
+    @pytest.mark.asyncio
+    async def test_blocking_wrapper_is_used(self) -> None:
+        """The fallback installs the blocking wrapper, not aiofiles."""
+        filename = self._create_temp_file()
+        try:
+            handler = AsyncFileHandler(filename, delay=True)
+
+            with patch(
+                "aiofiles.threadpool.open",
+                side_effect=self._EXECUTOR_GONE,
+            ):
+                await handler._ensure_file_open()
+                assert isinstance(handler._file, _BlockingFileWrapper)
+                assert await handler._file.tell() == 0
+                await handler.close()
+        finally:
+            os.unlink(filename)
+
+    @pytest.mark.asyncio
+    async def test_other_runtime_errors_still_raise(self) -> None:
+        """Unrelated RuntimeErrors must not trigger the fallback."""
+        filename = self._create_temp_file()
+        try:
+            handler = AsyncFileHandler(filename, delay=True)
+
+            with patch(
+                "aiofiles.threadpool.open",
+                side_effect=RuntimeError("unrelated failure"),
+            ):
+                with pytest.raises(FileError):
+                    await handler._open_file()
+            assert handler._file is None
+        finally:
+            os.unlink(filename)
 
 
 if __name__ == "__main__":

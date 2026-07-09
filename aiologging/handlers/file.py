@@ -51,6 +51,38 @@ def _check_aiofiles() -> None:
         )
 
 
+# ThreadPoolExecutor.submit raises RuntimeError with this text once
+# the interpreter (or the executor) is shutting down — the situation
+# of the atexit drain, where aiofiles cannot work at all.
+_EXECUTOR_GONE = "cannot schedule new futures"
+
+
+class _BlockingFileWrapper:
+    """
+    AsyncFileProtocol adapter over a plain blocking file.
+
+    Used when executors are unavailable (interpreter shutdown, i.e.
+    the atexit drain): the coroutine methods simply block, which is
+    acceptable there — the alternative is losing the records.
+    """
+
+    def __init__(self, file: Any) -> None:
+        self._file = file
+
+    async def write(self, s: str) -> None:
+        self._file.write(s)
+
+    async def flush(self) -> None:
+        self._file.flush()
+
+    async def close(self) -> None:
+        self._file.close()
+
+    async def tell(self) -> int:
+        position: int = self._file.tell()
+        return position
+
+
 class AsyncFileHandler(AsyncHandler):
     """
     Async handler that writes log records to a file.
@@ -161,12 +193,37 @@ class AsyncFileHandler(AsyncHandler):
             # mypy just has trouble with it
             self._file_loop = asyncio.get_running_loop()
         except Exception as e:
+            if isinstance(e, RuntimeError) and _EXECUTOR_GONE in str(e):
+                # Executors are gone — the interpreter is shutting
+                # down and this is the atexit drain. Fall back to
+                # blocking file I/O rather than lose the records.
+                self._open_file_blocking()
+                return
             raise FileError(
                 f"Failed to open file: {e}",
                 filename=str(self.filename),
                 operation="open",
                 errno=getattr(e, "errno", None),
             ) from e
+
+    def _open_file_blocking(self) -> None:
+        """Open the log file without aiofiles (atexit drain path)."""
+        try:
+            raw = open(
+                self.filename,
+                mode=self.mode,
+                encoding=self.encoding,
+                errors=self.errors,
+            )
+        except Exception as e:
+            raise FileError(
+                f"Failed to open file: {e}",
+                filename=str(self.filename),
+                operation="open",
+                errno=getattr(e, "errno", None),
+            ) from e
+        self._file = _BlockingFileWrapper(raw)
+        self._file_loop = asyncio.get_running_loop()
 
     def _abandon_file(self) -> None:
         """

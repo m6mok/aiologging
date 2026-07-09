@@ -75,9 +75,12 @@ Harness fixes:
 
 New scenarios (delivery-guarantee gaps first):
 
-- [ ] atexit drain (0.2.5): subprocess scenario — a script logs to a
+- [x] atexit drain (0.2.5): subprocess scenario — a script logs to a
   file handler and exits without `shutdown()`; verify the file
   contents. The only untested headline delivery guarantee.
+  (Found and fixed a real bug: `AsyncFileHandler` lost the whole
+  backlog at atexit because aiofiles needs executors, which are dead
+  during interpreter shutdown — now falls back to blocking I/O.)
 - [ ] D2 inline error path: `urlopen` raising (ConnectionError /
   HTTP 500) must fall back to the queue exactly once; plus a mixed
   INFO+ERROR stream through the bridge (all current D2 scenarios are
