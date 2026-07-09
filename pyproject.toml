@@ -9,8 +9,9 @@ description = "Asynchronous logging library with full compatibility to standard 
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
-    {name = "Aiologging Contributors"}
+    {name = "Evgenii Dementev (m6mok)"}
 ]
+keywords = ["logging", "async", "asyncio", "aiologging"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -50,7 +51,7 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.0.0",
     "mypy>=1.0.0",
-    "types-requests",
+    "flake8>=6.0.0",
     "types-aiofiles",
     "types-protobuf",
     "aiofiles>=23.0.0",
@@ -59,10 +60,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/example/aiologging"
-Repository = "https://github.com/example/aiologging"
-Documentation = "https://aiologging.readthedocs.io"
-"Bug Tracker" = "https://github.com/example/aiologging/issues"
+Homepage = "https://github.com/m6mok/aiologging"
+Repository = "https://github.com/m6mok/aiologging"
+"Bug Tracker" = "https://github.com/m6mok/aiologging/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -83,12 +83,6 @@ warn_unused_ignores = true
 warn_no_return = true
 warn_unreachable = true
 strict_equality = true
-
-[[tool.mypy.overrides]]
-module = [
-    "aiologging.*",
-    "tests.*"
-]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

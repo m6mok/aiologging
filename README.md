@@ -1,6 +1,8 @@
 # aiologging
 
-Asynchronous logging library for Python with full compatibility to the standard logging module but with async methods requiring await.
+[![CI](https://github.com/m6mok/aiologging/actions/workflows/ci.yml/badge.svg)](https://github.com/m6mok/aiologging/actions/workflows/ci.yml)
+
+Asynchronous logging library for Python (3.9+) with full compatibility to the standard logging module but with async methods requiring await.
 
 ## Features
 
@@ -96,6 +98,15 @@ async def main():
 
 asyncio.run(main())
 ```
+
+## Examples
+
+Complete runnable examples live in the [examples/](examples/) directory:
+
+- [examples/basic_usage.py](examples/basic_usage.py) — levels, `basicConfig`, `exc_info`, one-off logging
+- [examples/file_logging.py](examples/file_logging.py) — file handler, size- and time-based rotation
+- [examples/http_logging.py](examples/http_logging.py) — JSON batches over HTTP with a custom authenticator (includes a local test collector)
+- [examples/config_usage.py](examples/config_usage.py) — configuring loggers from a dictionary
 
 ## Handlers
 
@@ -287,6 +298,7 @@ async def main():
 ### Performance Metrics
 
 ```python
+import asyncio
 import aiologging
 
 async def main():
@@ -336,6 +348,7 @@ async def main():
 ### Configuration from Dictionary
 
 ```python
+import asyncio
 import aiologging
 
 config = {
@@ -374,6 +387,7 @@ asyncio.run(main())
 ### Configuration from File
 
 ```python
+import asyncio
 import aiologging
 
 # Configure from JSON file
@@ -397,7 +411,7 @@ logger = logging.getLogger("app")
 logger.info("Message")
 ```
 
-### aiologging
+### With aiologging
 
 ```python
 import aiologging
