@@ -18,9 +18,19 @@ from aiologging.config import (
     configure_from_env,
     get_configured_logger,
 )
+from typing import Any
+
 from aiologging.exceptions import ConfigurationError
 from aiologging.handlers.stream import AsyncStreamHandler
 from aiologging.handlers.file import AsyncFileHandler
+
+
+class DottedPathHandler(AsyncStreamHandler):
+    """Handler referenced by dotted path in configuration tests."""
+
+    def __init__(self, tag: str = "", **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.tag = tag
 
 
 class TestConfigManager:
@@ -581,6 +591,118 @@ class TestConfigManager:
         result = manager._parse_env_value(mixed_list_json)
         # The implementation parses this as a list with mixed types
         assert result == [1, "string", True, None]
+
+
+class TestCustomHandlerClasses:
+    """Test cases for dotted-path and registered custom handlers."""
+
+    @staticmethod
+    def _config_for(handler: dict) -> dict:
+        """Build a minimal config with a single handler."""
+        return {
+            "version": 1,
+            "loggers": {
+                "test": {
+                    "level": "INFO",
+                    "handlers": ["custom"]
+                }
+            },
+            "handlers": {"custom": handler}
+        }
+
+    def test_dotted_path_handler(self) -> None:
+        """Test creating a handler from a dotted path."""
+        manager = ConfigManager()
+        manager.load_from_dict(self._config_for({
+            "class": "tests.test_config.DottedPathHandler",
+            "level": "WARNING",
+            "tag": "from-config"
+        }))
+
+        logger = manager.get_logger("test")
+
+        assert len(logger.handlers) == 1
+        handler = logger.handlers[0]
+        assert isinstance(handler, DottedPathHandler)
+        assert handler.level == logging.WARNING
+        assert handler.tag == "from-config"
+
+    def test_dotted_path_builtin_class(self) -> None:
+        """Test that a dotted path to a bundled handler works."""
+        manager = ConfigManager()
+        manager.load_from_dict(self._config_for({
+            "class": "aiologging.handlers.stream.AsyncStreamHandler",
+            "level": "INFO"
+        }))
+
+        logger = manager.get_logger("test")
+
+        assert isinstance(logger.handlers[0], AsyncStreamHandler)
+
+    def test_registered_custom_handler(self) -> None:
+        """Test that a handler registered by name is constructed."""
+        manager = ConfigManager()
+        manager.register_handler("dotted", DottedPathHandler)
+        manager.load_from_dict(self._config_for({
+            "class": "dotted",
+            "level": "DEBUG",
+            "tag": "registered"
+        }))
+
+        logger = manager.get_logger("test")
+
+        handler = logger.handlers[0]
+        assert isinstance(handler, DottedPathHandler)
+        assert handler.tag == "registered"
+
+    def test_dotted_path_module_not_found(self) -> None:
+        """Test a dotted path pointing to a missing module."""
+        manager = ConfigManager()
+        manager.load_from_dict(self._config_for({
+            "class": "no.such.module.Handler"
+        }))
+
+        with pytest.raises(
+            ConfigurationError, match="Cannot import handler class"
+        ):
+            manager.get_logger("test")
+
+    def test_dotted_path_missing_attribute(self) -> None:
+        """Test a dotted path pointing to a missing class."""
+        manager = ConfigManager()
+        manager.load_from_dict(self._config_for({
+            "class": "tests.test_config.NoSuchHandler"
+        }))
+
+        with pytest.raises(
+            ConfigurationError, match="has no attribute"
+        ):
+            manager.get_logger("test")
+
+    def test_dotted_path_not_a_handler(self) -> None:
+        """Test a dotted path pointing to a non-handler class."""
+        manager = ConfigManager()
+        manager.load_from_dict(self._config_for({
+            "class": "json.JSONDecoder"
+        }))
+
+        with pytest.raises(
+            ConfigurationError, match="not an AsyncHandler subclass"
+        ):
+            manager.get_logger("test")
+
+    def test_custom_handler_bad_kwargs(self) -> None:
+        """Test that unexpected constructor kwargs raise an error."""
+        manager = ConfigManager()
+        manager.load_from_dict(self._config_for({
+            "class": "tests.test_config.DottedPathHandler",
+            "unexpected_option": 42
+        }))
+
+        with pytest.raises(
+            ConfigurationError, match="Cannot create handler"
+        ):
+            manager.get_logger("test")
 
 
 class TestGlobalFunctions:

@@ -8,6 +8,7 @@ and dictionaries.
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 from pathlib import Path
@@ -98,6 +99,12 @@ class ConfigManager:
     def load_from_dict(self, config: Dict[str, Any]) -> None:
         """
         Load configuration from a dictionary.
+
+        A handler's "class" is either a registered name ("stream",
+        "file", ...) or a dotted path to an importable
+        ``AsyncHandler`` subclass ("myapp.logging.MyHandler").
+        For dotted-path and custom registered classes, all remaining
+        keys are passed to the constructor as keyword arguments.
 
         Args:
             config: Configuration dictionary
@@ -312,9 +319,7 @@ class ConfigManager:
         if not handler_type:
             raise ConfigurationError(f"Handler {name} must specify a class")
 
-        handler_class = self._handler_registry.get(handler_type)
-        if not handler_class:
-            raise ConfigurationError(f"Unknown handler class: {handler_type}")
+        handler_class = self._resolve_handler_class(handler_type)
 
         # Parse the level
         level = self._parse_level(handler_config.get("level", "INFO"))
@@ -337,8 +342,105 @@ class ConfigManager:
                 handler_config, level
             )
         else:
+            return self._create_custom_handler(
+                handler_class, handler_config, level
+            )
+
+    def _resolve_handler_class(
+        self, handler_type: str
+    ) -> Type[AsyncHandler]:
+        """
+        Resolve a handler class from a registry name or a dotted path.
+
+        Args:
+            handler_type: Registered name (e.g. "stream") or dotted
+                path to an importable handler class
+                (e.g. "myapp.logging.MyHandler")
+
+        Returns:
+            The resolved handler class
+
+        Raises:
+            ConfigurationError: If the name is neither registered nor
+                an importable ``AsyncHandler`` subclass
+        """
+        handler_class = self._handler_registry.get(handler_type)
+        if handler_class is not None:
+            return handler_class
+
+        if "." not in handler_type:
             raise ConfigurationError(
-                f"Unsupported handler type: {handler_type}"
+                f"Unknown handler class: {handler_type}",
+                config_key="class",
+                config_value=handler_type,
+            )
+
+        module_name, _, class_name = handler_type.rpartition(".")
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError as e:
+            raise ConfigurationError(
+                f"Cannot import handler class {handler_type!r}: {e}",
+                config_key="class",
+                config_value=handler_type,
+            )
+
+        resolved = getattr(module, class_name, None)
+        if resolved is None:
+            raise ConfigurationError(
+                f"Module {module_name!r} has no attribute "
+                f"{class_name!r}",
+                config_key="class",
+                config_value=handler_type,
+            )
+        if not (
+            isinstance(resolved, type)
+            and issubclass(resolved, AsyncHandler)
+        ):
+            raise ConfigurationError(
+                f"{handler_type} is not an AsyncHandler subclass",
+                config_key="class",
+                config_value=handler_type,
+            )
+        return resolved
+
+    def _create_custom_handler(
+        self,
+        handler_class: Type[AsyncHandler],
+        config: Dict[str, Any],
+        level: int,
+    ) -> AsyncHandler:
+        """
+        Create a registered or dotted-path handler from configuration.
+
+        Every configuration key except ``class`` and ``level`` is
+        passed to the handler constructor as a keyword argument,
+        mirroring stdlib ``logging.config.dictConfig``.
+
+        Args:
+            handler_class: Handler class to instantiate
+            config: Handler configuration dictionary
+            level: Parsed logging level
+
+        Returns:
+            The created handler instance
+
+        Raises:
+            ConfigurationError: If the constructor rejects the
+                configured keyword arguments
+        """
+        kwargs = {
+            key: value
+            for key, value in config.items()
+            if key not in ("class", "level")
+        }
+        try:
+            return handler_class(level=level, **kwargs)
+        except TypeError as e:
+            raise ConfigurationError(
+                f"Cannot create handler "
+                f"{handler_class.__name__}: {e}",
+                config_value=handler_class.__name__,
             )
 
     def _create_stream_handler(
@@ -516,6 +618,10 @@ def configure_from_file(file_path: Union[str, Path]) -> None:
 def configure_from_dict(config: Dict[str, Any]) -> None:
     """
     Configure logging from a dictionary using the global configuration manager.
+
+    A handler's "class" is either a registered name ("stream",
+    "file", ...) or a dotted path to an importable ``AsyncHandler``
+    subclass, as in stdlib ``logging.config.dictConfig``.
 
     Args:
         config: Configuration dictionary

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aiologging"
-version = "0.2.3"
+version = "0.2.4"
 description = "Asynchronous logging library mirroring the standard logging API, with queue-based non-blocking handlers"
 readme = "README.md"
 license = {file = "LICENSE"}

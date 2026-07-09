@@ -392,6 +392,19 @@ async def main():
 asyncio.run(main())
 ```
 
+A handler's `"class"` is either a built-in name (`stream`, `file`,
+`http`, `http_json`, `telegram`, `rotating_file`,
+`timed_rotating_file`) or a dotted path to your own `AsyncHandler`
+subclass, as in stdlib `logging.config.dictConfig`:
+
+```python
+config["handlers"]["custom"] = {
+    "class": "myapp.logging.MyHandler",  # imported at build time
+    "level": "WARNING",
+    "endpoint": "https://example.com",   # extra keys -> constructor
+}
+```
+
 ### Configuration from File
 
 ```python

@@ -141,7 +141,10 @@ Extension hooks on `AsyncHttpHandlerBase` (added in 0.2.2):
 - `aiologging/config.py` — `ConfigManager` builds loggers/handlers
   from dicts, JSON files or env vars; string registry maps `"stream"`,
   `"file"`, `"http"`, `"http_json"`, `"telegram"`, `"rotating_file"`,
-  `"timed_rotating_file"` to classes.
+  `"timed_rotating_file"` to classes; a `"class"` outside the
+  registry is resolved as a dotted path to an `AsyncHandler`
+  subclass (stdlib `dictConfig`-style), with remaining config keys
+  passed to the constructor as keyword arguments.
 - `aiologging/utils.py` — `LazyLock` (an `asyncio.Lock` created on
   first use, because on Python 3.9 `asyncio.Lock()` binds to the
   current loop at construction), `handle_error_with_fallback`,
