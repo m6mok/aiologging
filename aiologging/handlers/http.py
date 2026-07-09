@@ -229,6 +229,8 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
         # aiohttp.ClientSession or httpx.AsyncClient, per self.backend
         self._session: Optional[Any] = None
         self._session_lock = LazyLock()
+        # Loop the session was created on; sessions cannot outlive it
+        self._session_loop: Optional[asyncio.AbstractEventLoop] = None
 
     def _session_is_closed(self) -> bool:
         """Check whether the underlying HTTP client is missing or closed."""
@@ -237,6 +239,28 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
         if self.backend == "aiohttp":
             return bool(self._session.closed)
         return bool(self._session.is_closed)
+
+    def _abandon_session(self) -> None:
+        """
+        Drop a session bound to a dead or foreign event loop.
+
+        A proper ``close()`` needs the session's own loop, which is
+        gone, so the best effort is releasing the transports
+        synchronously and silencing the "unclosed" destructor warnings.
+        """
+        session = self._session
+        self._session = None
+        self._session_loop = None
+        if session is None:
+            return
+        try:
+            if self.backend == "aiohttp":
+                connector = session.connector
+                session.detach()
+                if connector is not None:
+                    connector._close()
+        except Exception:
+            pass
 
     def _create_session(self) -> Any:
         """Create a new HTTP client for the configured backend."""
@@ -255,11 +279,26 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
         )
 
     async def _get_session(self) -> Any:
-        """Get or create the HTTP client for the configured backend."""
+        """
+        Get or create the HTTP client for the configured backend.
+
+        A session created on a previous event loop (which has died or
+        been replaced) is abandoned and a fresh one is created on the
+        current loop. Externally injected sessions (``_session_loop``
+        is None, e.g. a test transport) are left untouched.
+        """
+        loop = asyncio.get_running_loop()
+        if (
+            self._session is not None
+            and self._session_loop is not None
+            and self._session_loop is not loop
+        ):
+            self._abandon_session()
         if self._session_is_closed():
             async with self._session_lock:
                 if self._session_is_closed():
                     self._session = self._create_session()
+                    self._session_loop = loop
         return self._session
 
     async def _default_authenticator(
@@ -549,11 +588,21 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
 
     async def _close_resources(self) -> None:
         """Close the underlying HTTP client."""
-        if self._session is not None and not self._session_is_closed():
-            if self.backend == "aiohttp":
-                await self._session.close()
-            else:
-                await self._session.aclose()
+        if self._session is None or self._session_is_closed():
+            return
+        if (
+            self._session_loop is not None
+            and self._session_loop is not asyncio.get_running_loop()
+        ):
+            # The session's loop is gone; a graceful close is
+            # impossible, release what can be released synchronously
+            self._abandon_session()
+            return
+        if self.backend == "aiohttp":
+            await self._session.close()
+        else:
+            await self._session.aclose()
+        self._session_loop = None
 
     def __repr__(self) -> str:
         """Return a string representation of the handler."""

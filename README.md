@@ -76,9 +76,11 @@ await aiologging.warning("Logged on the root logger")
 
 Lifecycle:
 
-- the consumer and the handler workers start lazily on the first logged record and are rebuilt transparently if the event loop changes (e.g. one loop per test);
-- `await aiologging.flush()` waits until everything queued has been handled;
-- `await aiologging.shutdown()` drains the queue and closes all handlers — call it once at application exit.
+- the consumer and the handler workers start lazily on the first logged record and are rebuilt transparently if the event loop changes (e.g. one loop per test) — including handler resources such as HTTP sessions and open files;
+- `await aiologging.flush(timeout=...)` waits until everything queued has been handled (optionally bounded; raises `asyncio.TimeoutError` on expiry);
+- `await aiologging.shutdown(timeout=...)` drains the queue and closes all handlers — call it once at application exit; `timeout` bounds the drain phase to fit e.g. a container's termination grace period;
+- `aiologging.flush_sync(timeout=5.0)` is the synchronous emergency drain for contexts without a running loop (a `finally` after `asyncio.run`, plain sync code): it delivers queued *and buffered* records on a private event loop and returns `False` instead of raising when the budget expires;
+- at interpreter exit an automatic drain spends up to 2 seconds delivering whatever is left, then warns on stderr about anything undelivered. Configure with `basicConfig(atexit_flush=...)` or `aiologging.set_atexit_flush()`; `0` disables the drain. atexit does not run when the process dies from an unhandled signal — handle SIGTERM (e.g. `sys.exit`) for this to cover container shutdowns.
 
 ### Delivery and backpressure
 
@@ -121,6 +123,7 @@ Complete runnable examples live in the [examples/](examples/) directory:
 - [examples/http_logging.py](examples/http_logging.py) — JSON batches over HTTP with a custom authenticator (includes a local test collector)
 - [examples/telegram_logging.py](examples/telegram_logging.py) — sending records to a Telegram chat, including rate-limit handling (includes a local Bot API stand-in)
 - [examples/config_usage.py](examples/config_usage.py) — configuring loggers from a dictionary
+- [examples/emergency_flush.py](examples/emergency_flush.py) — delivery at process death: `shutdown(timeout=...)`, `flush_sync`, the automatic atexit drain
 
 ## Handlers
 
@@ -461,9 +464,11 @@ Sync (identical to `logging.Logger`):
 ### Module Functions
 
 - `getLogger(name=None)` — hierarchical loggers; no name returns the root logger
-- `basicConfig(level, format, datefmt, handlers, force, queue_size, overflow, delivery, capture_stdlib)`
-- `await flush()` — wait until every queued record has been handled
-- `await shutdown()` — drain the queue and close all handlers
+- `basicConfig(level, format, datefmt, handlers, force, queue_size, overflow, delivery, capture_stdlib, atexit_flush)`
+- `await flush(timeout=None)` — wait until every queued record has been handled
+- `await shutdown(timeout=None)` — drain the queue and close all handlers
+- `flush_sync(timeout=5.0)` — synchronous emergency drain without a running loop; returns `True` when fully delivered
+- `set_atexit_flush(timeout)` — budget of the automatic drain at interpreter exit (default 2.0; 0 disables)
 - `disable(level)` — like `logging.disable`
 - `captureStdlib(capture=True, level=NOTSET)` — bridge stdlib logging records
 - `await debug/info/warning/error/exception/critical/log(...)` — root-logger convenience coroutines

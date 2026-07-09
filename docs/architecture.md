@@ -67,13 +67,38 @@ Key pieces, all in `aiologging/logger.py`:
 - **`AsyncLoggerManager`** — owns the hierarchy (`getLogger` with
   dotted names, root at WARNING, eager intermediate loggers), the
   queue and the consumer. The global instance is
-  `logger._logger_manager`. `shutdown()` drains the queues, cancels
-  the consumer and the handler workers, closes every handler and
-  resets the hierarchy to a pristine state; `flush()` joins the main
-  queue, then every dispatch queue, then calls `force_flush()` on
-  buffered handlers.
-- **atexit hook** warns to stderr if records were never delivered
-  (user forgot `await aiologging.shutdown()`).
+  `logger._logger_manager`. `shutdown(timeout=None)` drains the
+  queues (bounded by `timeout` when given — on expiry the leftovers
+  are dropped and teardown proceeds), cancels the consumer and the
+  handler workers, closes every handler and resets the hierarchy to
+  a pristine state; `flush(timeout=None)` joins the main queue, then
+  every dispatch queue, then calls `force_flush()` on buffered
+  handlers (raises `asyncio.TimeoutError` on expiry).
+- **`flush_sync(timeout=5.0)`** — synchronous emergency drain for
+  contexts without a usable loop (`finally` after `asyncio.run`,
+  atexit, sync `main`). Runs `flush()` on a private event loop: the
+  consumer, the workers and the handler resources rebuild there via
+  the self-healing paths, are suspended again afterwards (records
+  and handler state survive for a later loop), and the loop is
+  closed. If the manager's loop is alive in another thread the drain
+  is submitted to it via `run_coroutine_threadsafe` instead. Called
+  from inside a running loop it raises; everything else is reported
+  through the `bool` return value, never raised — the caller is
+  typically a dying process.
+- **Handler loop-affinity** — resources bound to the loop that
+  created them heal on loop change: `LazyLock` re-creates its inner
+  lock, `AsyncHttpHandlerBase` abandons and re-creates its session
+  (externally injected sessions are left untouched), `AsyncFileHandler`
+  reopens the file in append mode, `BufferedAsyncHandler` restarts
+  its auto-flush task. This is what makes `flush_sync` (and one loop
+  per test) deliver through real handlers.
+- **atexit drain** — at interpreter exit, undelivered records
+  (queued *and* buffered in handlers) are drained via `flush_sync`
+  with a 2-second default budget, then a stderr warning reports
+  anything left. `set_atexit_flush(0)` / `basicConfig(atexit_flush=0)`
+  disables the drain, restoring warn-only behaviour. atexit does not
+  run on unhandled signals or `os._exit` — applications must handle
+  SIGTERM (e.g. `sys.exit`) for the drain to cover container stops.
 
 ## Stdlib bridge (`aiologging/bridge.py`)
 

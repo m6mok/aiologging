@@ -465,6 +465,8 @@ class BufferedAsyncHandler(AsyncHandler):
         self._buffer: List[LogRecord] = []
         self._priority_buffer: List[LogRecord] = []
         self._flush_task: Optional[asyncio.Task[None]] = None
+        # Loop the auto-flush task runs on; the task dies with it
+        self._flush_loop: Optional[asyncio.AbstractEventLoop] = None
         self._buffer_lock = LazyLock()
 
         # Adaptive buffering metrics
@@ -516,9 +518,17 @@ class BufferedAsyncHandler(AsyncHandler):
             else:
                 self._buffer.append(record)
 
-            # Start auto-flush task if needed
-            if self.auto_flush and self._flush_task is None:
+            # Start auto-flush task if needed; restart it when it died
+            # or belongs to a previous event loop (a task cannot
+            # survive its loop, so the stale reference is just dropped)
+            loop = asyncio.get_running_loop()
+            if self.auto_flush and (
+                self._flush_task is None
+                or self._flush_task.done()
+                or self._flush_loop is not loop
+            ):
                 self._flush_task = asyncio.create_task(self._auto_flush())
+                self._flush_loop = loop
 
             # Adaptive buffer sizing
             if self.adaptive_buffering:
@@ -745,14 +755,17 @@ class BufferedAsyncHandler(AsyncHandler):
 
     async def close(self) -> None:
         """Close the handler and flush any remaining records."""
-        # Cancel auto-flush task
+        # Cancel auto-flush task; a task from a previous loop died
+        # with it and cannot be cancelled or awaited from here
         if self._flush_task:
-            self._flush_task.cancel()
-            try:
-                await self._flush_task
-            except asyncio.CancelledError:
-                pass
+            if self._flush_loop is asyncio.get_running_loop():
+                self._flush_task.cancel()
+                try:
+                    await self._flush_task
+                except asyncio.CancelledError:
+                    pass
             self._flush_task = None
+            self._flush_loop = None
 
         # Flush remaining records
         await self._flush_buffer()
@@ -762,8 +775,12 @@ class BufferedAsyncHandler(AsyncHandler):
 
     async def _close_resources(self) -> None:
         """Close handler-specific resources."""
-        # Cancel any remaining tasks
-        if self._flush_task and not self._flush_task.done():
+        # Cancel any remaining tasks (only on their own loop)
+        if (
+            self._flush_task
+            and not self._flush_task.done()
+            and self._flush_loop is asyncio.get_running_loop()
+        ):
             self._flush_task.cancel()
 
     def get_metrics(self) -> dict[str, Any]:

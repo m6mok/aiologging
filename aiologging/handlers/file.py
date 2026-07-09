@@ -99,6 +99,8 @@ class AsyncFileHandler(AsyncHandler):
         self.errors = errors or "strict"
         self.delay = delay
         self._file: Optional[AsyncFileProtocol] = None  # aiofiles file object
+        # Loop the file was opened on; aiofiles binds the wrapper to it
+        self._file_loop: Optional[asyncio.AbstractEventLoop] = None
         self._write_lock = LazyLock()
 
         # Validate the file path
@@ -157,6 +159,7 @@ class AsyncFileHandler(AsyncHandler):
             # Type: ignore for aiofiles.open type issues
             # The actual type is correct at runtime,
             # mypy just has trouble with it
+            self._file_loop = asyncio.get_running_loop()
         except Exception as e:
             raise FileError(
                 f"Failed to open file: {e}",
@@ -165,8 +168,47 @@ class AsyncFileHandler(AsyncHandler):
                 errno=getattr(e, "errno", None),
             ) from e
 
+    def _abandon_file(self) -> None:
+        """
+        Drop a file wrapper bound to a dead or foreign event loop.
+
+        An async ``close()`` needs the loop the file was opened on,
+        which is gone; the underlying blocking file is closed directly
+        so buffered data reaches the OS.
+        """
+        wrapper = self._file
+        self._file = None
+        self._file_loop = None
+        if wrapper is None:
+            return
+        try:
+            raw = getattr(wrapper, "_file", None)
+            if raw is not None:
+                raw.close()
+        except Exception:
+            pass
+
     async def _ensure_file_open(self) -> None:
-        """Ensure the file is open, opening it if necessary."""
+        """
+        Ensure the file is open on the current loop.
+
+        aiofiles binds the async wrapper to the loop it was opened on;
+        after a loop change the old wrapper is unusable, so it is
+        abandoned and the file is reopened (in append mode where
+        possible, to not truncate what was already written).
+        Externally injected files (``_file_loop`` is None) are left
+        untouched.
+        """
+        if (
+            self._file is not None
+            and self._file_loop is not None
+            and self._file_loop is not asyncio.get_running_loop()
+        ):
+            self._abandon_file()
+            if self.mode == "w":
+                # Reopening with "w" would wipe the records already
+                # written on the previous loop
+                self.mode = "a"
         if self._file is None:
             await self._open_file()
 
@@ -225,6 +267,14 @@ class AsyncFileHandler(AsyncHandler):
     async def _close_resources(self) -> None:
         """Close the file if it's open."""
         if self._file is not None:
+            if (
+                self._file_loop is not None
+                and self._file_loop is not asyncio.get_running_loop()
+            ):
+                # The loop the file was opened on is gone; close the
+                # underlying blocking file directly
+                self._abandon_file()
+                return
             try:
                 await self._file.close()
             except Exception as e:
@@ -232,6 +282,7 @@ class AsyncFileHandler(AsyncHandler):
                 log_error_to_stderr(f"Error closing file {self.filename}", e)
             finally:
                 self._file = None
+                self._file_loop = None
 
     def __repr__(self) -> str:
         """Return a string representation of the handler."""

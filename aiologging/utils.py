@@ -32,20 +32,29 @@ from .types import AsyncErrorHandler
 
 class LazyLock:
     """
-    ``asyncio.Lock`` that is created on first use.
+    ``asyncio.Lock`` that is created on first use and follows the
+    running event loop.
 
     On Python 3.9 ``asyncio.Lock()`` binds to the current event loop at
     construction time, so creating one in a handler constructor fails
     outside a running loop. Deferring creation to the first
     ``async with`` keeps handlers constructible anywhere.
+
+    The inner lock is re-created when the running loop changes (a new
+    loop per test, or an emergency drain on a private loop after the
+    original one died). Any holder or waiter of the previous lock died
+    with its loop, so dropping it is safe.
     """
 
     def __init__(self) -> None:
         self._lock: Optional[asyncio.Lock] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     async def __aenter__(self) -> None:
-        if self._lock is None:
+        loop = asyncio.get_running_loop()
+        if self._lock is None or self._loop is not loop:
             self._lock = asyncio.Lock()
+            self._loop = loop
         await self._lock.acquire()
 
     async def __aexit__(

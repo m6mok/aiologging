@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import concurrent.futures
 import io
 import logging
 import os
@@ -848,8 +849,15 @@ class _HandlerDispatcher:
         finally:
             _IN_CONSUMER.reset(token)
 
-    async def stop(self) -> None:
-        """Cancel the worker and reset the dispatcher state."""
+    async def suspend(self) -> None:
+        """
+        Cancel the worker, keeping queued records.
+
+        Unlike :meth:`stop` the queue and pending records survive:
+        ``ensure_worker`` rescues and redelivers them when records
+        flow again (possibly on another loop). Used by ``flush_sync``
+        so its private loop can close without pending tasks.
+        """
         task = self._task
         if task is not None:
             task.cancel()
@@ -860,6 +868,10 @@ class _HandlerDispatcher:
             except Exception:
                 pass
         self._task = None
+
+    async def stop(self) -> None:
+        """Cancel the worker and reset the dispatcher state."""
+        await self.suspend()
         self._queue = None
         self._loop = None
         self._pending.clear()
@@ -1177,11 +1189,26 @@ class AsyncLoggerManager:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    async def flush(self) -> None:
+    async def flush(self, timeout: Optional[float] = None) -> None:
         """
         Wait until every queued record has been handled, then force
         buffered handlers to flush.
+
+        Args:
+            timeout: Optional wall-clock bound in seconds; when it
+                expires ``asyncio.TimeoutError`` is raised and any
+                undelivered records stay queued
+
+        Raises:
+            asyncio.TimeoutError: If the drain outlived ``timeout``
         """
+        if timeout is None:
+            await self._flush()
+        else:
+            await asyncio.wait_for(self._flush(), timeout)
+
+    async def _flush(self) -> None:
+        """Unbounded drain: main queue, dispatch queues, buffers."""
         if self._pending:
             self._ensure_consumer()
         if self._queue is not None:
@@ -1208,16 +1235,27 @@ class AsyncLoggerManager:
                             f"{type(handler).__name__}: {e}\n"
                         )
 
-    async def shutdown(self) -> None:
+    async def shutdown(self, timeout: Optional[float] = None) -> None:
         """
         Drain the queue, stop the consumer, close every handler and
         reset the hierarchy to a pristine state.
 
         Loggers obtained before shutdown are closed; ``getLogger``
         returns fresh instances afterwards.
+
+        Args:
+            timeout: Optional bound in seconds for the drain phase
+                (e.g. a container's termination grace period); when it
+                expires the remaining records are dropped and teardown
+                proceeds
         """
         try:
-            await self.flush()
+            await self.flush(timeout=timeout)
+        except asyncio.TimeoutError:
+            sys.stderr.write(
+                f"aiologging: flush timed out after {timeout}s during "
+                "shutdown; undelivered records were dropped\n"
+            )
         except Exception as e:
             sys.stderr.write(f"Error flushing during shutdown: {e}\n")
 
@@ -1250,6 +1288,128 @@ class AsyncLoggerManager:
 
         self.loggerDict.clear()
         self.root = AsyncLogger("root", level=WARNING, manager=self)
+
+    def flush_sync(self, timeout: float = 5.0) -> bool:
+        """
+        Synchronous emergency drain for contexts without a usable
+        event loop: ``finally`` blocks after ``asyncio.run`` returned,
+        ``atexit`` hooks, plain synchronous ``main`` functions.
+
+        Runs the drain on a private event loop (the consumer, the
+        handler workers and the handler resources all rebuild there
+        and are suspended again afterwards). If the manager's loop is
+        alive in another thread, the drain is submitted to it instead.
+
+        Best effort by design: failures are reported in the return
+        value, not raised, because the caller is typically a dying
+        process.
+
+        Args:
+            timeout: Wall-clock bound in seconds for the whole drain
+
+        Returns:
+            True if everything was delivered within the timeout
+
+        Raises:
+            RuntimeError: If called from inside a running event loop
+                (``await flush()`` must be used there instead)
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError(
+                "flush_sync() cannot be called from a running event "
+                "loop; use 'await aiologging.flush()' instead"
+            )
+
+        loop = self._loop
+        if loop is not None and not loop.is_closed() and loop.is_running():
+            # The consumer's loop is alive in another thread
+            future = asyncio.run_coroutine_threadsafe(self.flush(), loop)
+            try:
+                future.result(timeout)
+                return True
+            except concurrent.futures.TimeoutError:
+                future.cancel()
+                return False
+            except Exception:
+                return False
+
+        private = asyncio.new_event_loop()
+        try:
+            return private.run_until_complete(self._drain_bounded(timeout))
+        except Exception:
+            return False
+        finally:
+            private.close()
+
+    async def _drain_bounded(self, timeout: float) -> bool:
+        """
+        Drain under a wall-clock bound, then suspend the consumer and
+        the workers so the (private) loop can close without leaving
+        pending tasks behind.
+        """
+        drained = True
+        try:
+            await self.flush(timeout=timeout)
+        except asyncio.TimeoutError:
+            drained = False
+        except Exception:
+            drained = False
+        finally:
+            await self._suspend()
+        return drained
+
+    async def _suspend(self) -> None:
+        """
+        Cancel the consumer and the handler workers, keeping queued
+        records and handler state so logging can resume on a later
+        loop. Handler resources bound to the current loop (HTTP
+        sessions, files) are released so they do not die with it.
+        """
+        task = self._consumer_task
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        self._consumer_task = None
+
+        for dispatcher in list(self._dispatchers.values()):
+            await dispatcher.suspend()
+
+        for logger in [self.root, *self.loggerDict.values()]:
+            for handler in logger.handlers:
+                try:
+                    await handler._close_resources()
+                except Exception:
+                    pass
+
+    def undelivered(self) -> int:
+        """
+        Number of records not yet delivered: queued, pending, in
+        flight on dispatchers, or sitting in handler buffers.
+        """
+        queue = self._queue
+        count = (queue.qsize() if queue is not None else 0) + len(
+            self._pending
+        )
+        for dispatcher in self._dispatchers.values():
+            count += dispatcher.undelivered()
+        for logger in [self.root, *self.loggerDict.values()]:
+            for handler in logger.handlers:
+                buffered = getattr(handler, "_buffer", None)
+                if buffered is not None:
+                    count += len(buffered)
+                priority = getattr(handler, "_priority_buffer", None)
+                if priority is not None:
+                    count += len(priority)
+        return count
 
     def get_metrics(self) -> Dict[str, Union[int, float]]:
         """Get queue and consumer metrics."""
@@ -1293,19 +1453,54 @@ def disable(level: int = CRITICAL) -> None:
     _logger_manager.disable_level = level
 
 
-async def flush() -> None:
-    """Wait until every queued record has been handled."""
-    await _logger_manager.flush()
+async def flush(timeout: Optional[float] = None) -> None:
+    """
+    Wait until every queued record has been handled.
+
+    Args:
+        timeout: Optional wall-clock bound in seconds
+            (``asyncio.TimeoutError`` is raised when it expires)
+    """
+    await _logger_manager.flush(timeout=timeout)
 
 
-async def shutdown() -> None:
+async def shutdown(timeout: Optional[float] = None) -> None:
     """
     Drain the queue, close all handlers and reset the hierarchy.
 
     Call this once before the application exits, while the event loop
     is still running.
+
+    Args:
+        timeout: Optional bound in seconds for the drain phase; on
+            expiry the remaining records are dropped and teardown
+            proceeds
     """
-    await _logger_manager.shutdown()
+    await _logger_manager.shutdown(timeout=timeout)
+
+
+def flush_sync(timeout: float = 5.0) -> bool:
+    """
+    Synchronous emergency drain for contexts without a running event
+    loop: a ``finally`` after ``asyncio.run``, an ``atexit`` hook, a
+    signal-initiated teardown in synchronous code.
+
+    Undelivered records (including buffered ones in HTTP/Telegram
+    handlers) are delivered on a private event loop. Best effort:
+    returns False instead of raising when the timeout expires or
+    delivery fails.
+
+    Args:
+        timeout: Wall-clock bound in seconds for the whole drain
+
+    Returns:
+        True if everything was delivered within the timeout
+
+    Raises:
+        RuntimeError: If called from inside a running event loop;
+            use ``await aiologging.flush()`` there instead
+    """
+    return _logger_manager.flush_sync(timeout=timeout)
 
 
 def _auto_configure_root() -> None:
@@ -1376,19 +1571,54 @@ async def log(level: int, msg: Any, *args: Any, **kwargs: Any) -> None:
     await _logger_manager.root.log(level, msg, *args, **kwargs)
 
 
-def _warn_undrained_at_exit() -> None:
-    """Warn on interpreter exit if records were never flushed."""
-    queue = _logger_manager._queue
-    undrained = (queue.qsize() if queue is not None else 0) + len(
-        _logger_manager._pending
+# Wall-clock budget of the automatic atexit drain; 0 disables it
+# (records are then only counted and warned about). Mirrors the
+# opt-out convention of comparable delivery SDKs.
+_atexit_flush_timeout: float = 2.0
+
+
+def set_atexit_flush(timeout: float) -> None:
+    """
+    Configure the automatic drain of undelivered records at
+    interpreter exit.
+
+    By default the atexit hook spends up to 2 seconds delivering
+    whatever is still queued or buffered (see :func:`flush_sync`).
+    Pass 0 to disable the drain and only warn to stderr.
+
+    Note: atexit hooks do not run when the process dies from an
+    unhandled signal, ``os._exit`` or SIGKILL — handle SIGTERM (e.g.
+    via ``sys.exit``) for the drain to cover container shutdowns.
+
+    Args:
+        timeout: Drain budget in seconds; 0 disables the drain
+    """
+    global _atexit_flush_timeout
+    if timeout < 0:
+        raise ValueError("timeout must be >= 0")
+    _atexit_flush_timeout = timeout
+
+
+def _drain_at_exit() -> None:
+    """Deliver (or at least count) undelivered records at exit."""
+    undrained = _logger_manager.undelivered()
+    if not undrained:
+        return
+
+    if _atexit_flush_timeout > 0:
+        try:
+            if _logger_manager.flush_sync(timeout=_atexit_flush_timeout):
+                return
+        except Exception:
+            pass
+        undrained = _logger_manager.undelivered()
+        if not undrained:
+            return
+
+    sys.stderr.write(
+        f"aiologging: {undrained} log record(s) were never delivered; "
+        "call 'await aiologging.shutdown()' before exiting\n"
     )
-    for dispatcher in _logger_manager._dispatchers.values():
-        undrained += dispatcher.undelivered()
-    if undrained:
-        sys.stderr.write(
-            f"aiologging: {undrained} log record(s) were never delivered; "
-            "call 'await aiologging.shutdown()' before exiting\n"
-        )
 
 
-atexit.register(_warn_undrained_at_exit)
+atexit.register(_drain_at_exit)
