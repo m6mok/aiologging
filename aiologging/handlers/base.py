@@ -770,9 +770,21 @@ class BufferedAsyncHandler(AsyncHandler):
         raise NotImplementedError
 
     async def force_flush(self) -> None:
-        """Force flush all buffers immediately."""
+        """Force flush all buffers immediately, until empty.
+
+        One ``_flush_buffer`` pass sends at most ``max_batch_size``
+        regular records; a buffer that grew past that (e.g. a drain
+        after downtime) needs several passes — stopping after one
+        would leave records behind while flush() reports success.
+        """
         async with self._buffer_lock:
-            await self._flush_buffer()
+            while self._buffer or self._priority_buffer:
+                before = len(self._buffer) + len(self._priority_buffer)
+                await self._flush_buffer()
+                if len(self._buffer) + len(self._priority_buffer) >= (
+                    before
+                ):  # pragma: no cover - defensive: no progress
+                    break
 
     async def close(self) -> None:
         """Close the handler and flush any remaining records."""
@@ -788,8 +800,8 @@ class BufferedAsyncHandler(AsyncHandler):
             self._flush_task = None
             self._flush_loop = None
 
-        # Flush remaining records
-        await self._flush_buffer()
+        # Flush remaining records (all of them, not one batch)
+        await self.force_flush()
 
         # Call parent close
         await super().close()

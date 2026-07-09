@@ -332,6 +332,37 @@ class TestBufferedAsyncHandler:
         assert len(handler._buffer) == 0  # Should be flushed
         handler.flush.assert_called_once_with([record1, record2])
 
+    @pytest.mark.asyncio
+    async def test_force_flush_drains_past_max_batch_size(self) -> None:
+        """
+        Regression: one force_flush must drain the whole buffer, not
+        a single max_batch_size chunk — flush()/flush_sync/atexit
+        report success while records would stay buffered otherwise.
+        """
+        flushed: List[logging.LogRecord] = []
+
+        class Collecting(BufferedAsyncHandlerImpl):
+            async def flush(
+                self, records: List[logging.LogRecord]
+            ) -> None:
+                flushed.extend(records)
+
+        handler = Collecting(
+            buffer_size=10_000, auto_flush=False, max_batch_size=100
+        )
+        records = self._create_test_records(
+            *(f"msg {i}" for i in range(250))
+        )
+        for record in records:
+            await handler.handle(record)
+        assert len(handler._buffer) == 250
+
+        await handler.force_flush()
+
+        assert len(flushed) == 250
+        assert handler._buffer == []
+        assert handler._priority_buffer == []
+
     def _create_test_records(self, *messages: str) -> List[logging.LogRecord]:
         """Create test log records with the given messages."""
         records = []
