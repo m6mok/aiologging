@@ -572,6 +572,23 @@ MIT License - see LICENSE file for details.
 
 ## Changelog
 
+### 0.2.9
+
+Three delivery-guarantee fixes, all found by the new stress harness
+(`stress/`, see `docs/stress-testing.md`):
+
+- The atexit drain delivered zero file records: aiofiles needs
+  executors, which are already shut down at interpreter exit —
+  `AsyncFileHandler` now falls back to blocking file I/O there
+- `flush_sync` after an event-loop death lost the in-flight records
+  when the queues were full: rescuing a dead queue no longer wakes
+  its dead-loop putters, teardown errors are no longer mistaken for
+  handler failures, and the rescue never evicts records silently
+- `force_flush()` (and therefore `flush()`, `flush_sync()` and the
+  atexit drain) flushed at most one `max_batch_size` batch, leaving
+  the rest buffered while reporting success — it now drains the
+  buffers completely
+
 ### 0.2.0
 
 **Breaking**: the logging pipeline is now queue-based and the API strictly follows the standard `logging` module.
