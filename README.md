@@ -589,6 +589,76 @@ Three delivery-guarantee fixes, all found by the new stress harness
   the rest buffered while reporting success — it now drains the
   buffers completely
 
+### 0.2.8
+
+- Silenced cosmetic stderr noise from consumer/worker coroutines
+  GC-finalized after their event loop died (guarded `ContextVar`
+  reset, unstarted coroutines closed, quiet exit when `queue.get()`
+  cleanup touches a closed loop); no records were ever lost
+
+### 0.2.7
+
+- Opt-in `LevelAwareDrop` queue policy (`basicConfig(drop_policy=...)`
+  or `manager.drop_policy`): above the `watermark` fill ratio
+  arriving records below `discard_below` are discarded, and on a full
+  queue the oldest expendable record is evicted — a DEBUG/INFO burst
+  can no longer push an ERROR out of the queue; mirrors rsyslog
+  `discardSeverity` / logback `discardingThreshold`, default
+  behaviour unchanged
+
+### 0.2.6
+
+- Inline delivery of critical bridged records:
+  `captureStdlib(inline_level=logging.ERROR)` delivers matching
+  records synchronously — before queueing — so the pager message
+  leaves even if the process dies on the next line
+- `AsyncHandler.emit_sync(record, timeout)` opt-in hook (implemented
+  by the Telegram handler with a deadline-joined helper thread)
+- Bounded blocking: `inline_timeout` per record plus a token bucket
+  (`inline_burst`, `inline_rate`); failures fall back to the queue
+  path, a dedup marker prevents double delivery
+
+### 0.2.5
+
+- `flush_sync(timeout=5.0) -> bool` — synchronous emergency drain
+  without a running loop (private loop, or
+  `run_coroutine_threadsafe` when the manager's loop is alive in
+  another thread); best-effort, never raises
+- `flush(timeout=)` raises `asyncio.TimeoutError` on expiry;
+  `shutdown(timeout=)` bounds the drain and always completes teardown
+- Automatic atexit drain of undelivered records (2 s budget,
+  opt-out via `set_atexit_flush(0)` / `basicConfig(atexit_flush=0)`)
+
+### 0.2.4
+
+- `configure_from_dict` accepts a dotted path to an `AsyncHandler`
+  subclass in `"class"` (stdlib `dictConfig`-style), passing the
+  remaining keys to the constructor
+- Fixed `register_handler`: registered custom classes no longer fail
+  with "Unsupported handler type"
+
+### 0.2.3
+
+- Per-handler dispatch queues, each drained by its own worker task
+  (`QueueListener` style): a stuck sink only backs up its own queue,
+  other handlers keep delivering
+- Semantics preserved: per-handler ordering, `delivery="await"`
+  resolves after the last handler, overflow policies apply per
+  queue, workers survive event-loop changes
+
+### 0.2.2
+
+- `AsyncTelegramHandler`: batches records into `sendMessage` calls
+  within the 4096-char limit, honours `retry_after` on 429, redacts
+  the bot token in errors and `repr`
+- `_retry_delay_from_response` hook on HTTP handlers lets the retry
+  policy inspect the response
+
+### 0.2.1
+
+- httpx as an alternative HTTP backend alongside aiohttp
+  (`backend="httpx"` or auto-detection)
+
 ### 0.2.0
 
 **Breaking**: the logging pipeline is now queue-based and the API strictly follows the standard `logging` module.
