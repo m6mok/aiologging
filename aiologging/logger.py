@@ -85,6 +85,12 @@ _IN_CONSUMER: ContextVar[bool] = ContextVar(
     "aiologging_in_consumer", default=False
 )
 
+# Attribute set on a record by the stdlib bridge when it delivered the
+# record inline (synchronously, before queueing): the set of handlers
+# that already received it. Their workers skip the record so it is not
+# delivered twice; every other handler gets it from the queue as usual.
+_INLINE_HANDLED_ATTR = "_aiologging_inline_handled"
+
 # Used to render exc_info into exc_text when a record is frozen for the
 # queue; any stdlib-compatible formatter picks exc_text up later.
 _exception_formatter = logging.Formatter()
@@ -574,7 +580,10 @@ class AsyncLogger:
         reported to stderr and never interrupt dispatch.
         """
         handlers, found = self._collect_handlers(record)
+        inline_handled = getattr(record, _INLINE_HANDLED_ATTR, None)
         for handler in handlers:
+            if inline_handled is not None and handler in inline_handled:
+                continue
             try:
                 await handler.handle(record)
             except Exception as e:
@@ -825,6 +834,13 @@ class _HandlerDispatcher:
             while True:
                 item = await queue.get()
                 _, record, completion = item
+                handled = getattr(record, _INLINE_HANDLED_ATTR, None)
+                if handled is not None and self._handler in handled:
+                    # The bridge already delivered this record to this
+                    # handler inline — account for the dispatch and move on
+                    completion.done_one()
+                    queue.task_done()
+                    continue
                 self._in_flight = item
                 interrupted = False
                 try:

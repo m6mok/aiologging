@@ -587,7 +587,8 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
         return _HttpxResponseAdapter(response)
 
     async def _close_resources(self) -> None:
-        """Close the underlying HTTP client."""
+        """Stop the auto-flush task and close the underlying client."""
+        await super()._close_resources()
         if self._session is None or self._session_is_closed():
             return
         if (

@@ -72,6 +72,12 @@ LogLevel: TypeAlias = Literal[
     "CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"
 ]
 
+# Attribute set on the helper threads that perform inline (synchronous)
+# delivery, so the stdlib bridge never starts a nested inline send from
+# code logging inside such a thread. Shared here because the bridge and
+# the handlers cannot import each other.
+INLINE_SENDER_THREAD_ATTR = "_aiologging_inline_sender"
+
 
 LOG_LEVEL_MAP: Dict[LogLevel, int] = {
     "CRITICAL": 50,

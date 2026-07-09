@@ -10,11 +10,15 @@ Telegram chat via the Bot API ``sendMessage`` method, respecting the
 from __future__ import annotations
 
 import json
+import ssl
+import threading
+import urllib.request
 from logging import LogRecord, NOTSET
 from typing import Any, Dict, List, Optional, Union
 
 from ..exceptions import ConfigurationError
 from ..types import (
+    INLINE_SENDER_THREAD_ATTR,
     BatchConfig,
     ErrorHandler,
     FilterProtocol,
@@ -218,6 +222,78 @@ class AsyncTelegramHandler(AsyncHttpHandlerBase):
         if self.message_thread_id is not None:
             payload["message_thread_id"] = self.message_thread_id
         return payload
+
+    def emit_sync(self, record: LogRecord, timeout: float) -> bool:
+        """
+        Deliver one record synchronously via ``urllib``, bypassing
+        the queue — the stdlib bridge calls this for critical records
+        when ``captureStdlib(inline_level=...)`` is set.
+
+        The POST runs in a short-lived helper thread joined with the
+        deadline: urllib's own ``timeout`` does not cover DNS
+        resolution (it starts before the socket exists), so a bare
+        call could block the caller far longer than requested. On any
+        failure — timeout, network error, non-2xx response — False is
+        returned and the record stays on the normal queue path.
+
+        Args:
+            record: The log record to deliver
+            timeout: Wall-clock budget in seconds for all chunks
+
+        Returns:
+            True if every message chunk got a 2xx response in time
+        """
+        if self._closed or timeout <= 0:
+            return False
+        if not self.filter(record):
+            return False
+        try:
+            payloads = [
+                self._build_payload(text)
+                for text in self._build_messages([record])
+            ]
+        except Exception:
+            return False
+        if not payloads:
+            return False
+
+        outcome: List[bool] = []
+
+        def send() -> None:
+            outcome.append(
+                all(self._post_sync(p, timeout) for p in payloads)
+            )
+
+        thread = threading.Thread(
+            target=send, name="aiologging-telegram-inline", daemon=True
+        )
+        # Anything logging from inside the send must not trigger a
+        # nested inline delivery (the bridge checks this attribute)
+        setattr(thread, INLINE_SENDER_THREAD_ATTR, True)
+        thread.start()
+        thread.join(timeout)
+        return bool(outcome) and outcome[0]
+
+    def _post_sync(self, payload: Dict[str, Any], timeout: float) -> bool:
+        """POST one ``sendMessage`` payload with urllib; True on 2xx."""
+        request = urllib.request.Request(
+            self.url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={**self.headers, "Content-Type": "application/json"},
+            method="POST",
+        )
+        context: Optional[ssl.SSLContext] = None
+        if not self.verify_ssl:
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+        try:
+            with urllib.request.urlopen(
+                request, timeout=timeout, context=context
+            ) as response:
+                return bool(200 <= response.status < 300)
+        except Exception:
+            return False
 
     async def _prepare_request_data(
         self, records: List[LogRecord]

@@ -28,6 +28,14 @@ doubt.
   - `_make_request_with_retries(...)` — e.g. to fan one batch out
     into several requests (Telegram sends one request per message
     chunk by looping over payloads and calling `super()`).
+- Any handler may additionally override
+  `emit_sync(record, timeout) -> bool` to support the bridge's inline
+  delivery of critical records (`captureStdlib(inline_level=...)`).
+  The contract: pure sync, no event loop, return within `timeout`,
+  never raise; True means delivered (the queue worker then skips the
+  record). Run blocking I/O in a helper thread joined with the
+  deadline — socket timeouts do not cover DNS resolution (see the
+  Telegram handler).
 
 ## 2. Wire it into the library
 

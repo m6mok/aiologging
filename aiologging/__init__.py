@@ -123,7 +123,7 @@ DEBUG = logging.DEBUG
 NOTSET = logging.NOTSET
 
 # Version information
-__version__ = "0.2.5"
+__version__ = "0.2.6"
 __author__ = "Evgenii Dementev (m6mok)"
 __license__ = "MIT"
 
@@ -364,6 +364,7 @@ def basicConfig(
     overflow: Optional[OverflowPolicy] = None,
     delivery: Optional[DeliveryMode] = None,
     capture_stdlib: Optional[bool] = None,
+    inline_level: Optional[int] = None,
     atexit_flush: Optional[float] = None,
 ) -> None:
     """
@@ -389,6 +390,10 @@ def basicConfig(
             "await" resolves after handlers processed it
         capture_stdlib: True routes stdlib logging records through
             aiologging handlers (see :func:`captureStdlib`)
+        inline_level: With ``capture_stdlib``, minimum level at which
+            bridged records are also delivered inline (synchronously,
+            before queueing) to handlers that support it, e.g.
+            AsyncTelegramHandler (see :func:`captureStdlib`)
         atexit_flush: Budget in seconds for the automatic drain of
             undelivered records at interpreter exit (default 2.0);
             0 disables the drain (see :func:`set_atexit_flush`)
@@ -419,7 +424,7 @@ def basicConfig(
         root.setLevel(level)
 
     if capture_stdlib is not None:
-        captureStdlib(capture_stdlib)
+        captureStdlib(capture_stdlib, inline_level=inline_level)
 
     if atexit_flush is not None:
         set_atexit_flush(atexit_flush)

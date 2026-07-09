@@ -261,6 +261,27 @@ class AsyncHandler(AsyncHandlerABC):
             self._metrics.increment_errors()
             await self._handle_error(record, e)
 
+    def emit_sync(self, record: LogRecord, timeout: float) -> bool:
+        """
+        Deliver one record synchronously, without an event loop.
+
+        Best-effort hook for emergency paths: the stdlib bridge calls
+        it to deliver ERROR+ records inline, before they are queued
+        (see ``captureStdlib(inline_level=...)``). Implementations
+        must return within ``timeout`` seconds and must not raise;
+        True means the record was fully delivered, so its queue
+        worker will skip it. The base handler does not support
+        synchronous delivery.
+
+        Args:
+            record: The log record to deliver
+            timeout: Wall-clock budget in seconds
+
+        Returns:
+            True if the record was fully delivered
+        """
+        return False
+
     async def _emit_with_retry(
         self, record: LogRecord, formatted_message: str
     ) -> None:
@@ -774,14 +795,21 @@ class BufferedAsyncHandler(AsyncHandler):
         await super().close()
 
     async def _close_resources(self) -> None:
-        """Close handler-specific resources."""
-        # Cancel any remaining tasks (only on their own loop)
+        """Stop the auto-flush task (only on its own loop)."""
         if (
             self._flush_task
             and not self._flush_task.done()
             and self._flush_loop is asyncio.get_running_loop()
         ):
             self._flush_task.cancel()
+            try:
+                await self._flush_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+            self._flush_task = None
+            self._flush_loop = None
 
     def get_metrics(self) -> dict[str, Any]:
         """

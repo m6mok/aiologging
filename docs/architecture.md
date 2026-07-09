@@ -111,13 +111,34 @@ are buffered in `_pending` until the consumer starts. Because a sync
 producer cannot await, the `"block"` policy degrades to `"drop_old"`
 for bridged records.
 
+With `captureStdlib(inline_level=logging.ERROR)` the bridge also
+delivers critical records **inline**: before queueing, the record is
+offered to handlers implementing `emit_sync` (the Telegram handler
+POSTs via `urllib` from a helper thread joined with the deadline —
+urllib's own timeout does not cover DNS resolution, so a bare call
+could block far longer). The inline path is bounded by
+`inline_timeout` (default 3 s) and a token bucket (`inline_burst` /
+`inline_rate`, default 1 send + 2 per minute); any failure leaves the
+record on the normal queue path. A handler that delivered inline is
+recorded on the record (`_aiologging_inline_handled`) and its
+dispatch worker skips it; other handlers deliver as usual. Guards
+against recursion: the `_IN_CONSUMER` check, a thread-local
+re-entrancy flag, a marker attribute on inline send threads, and the
+bridge overrides `Handler.handle` to run without the stdlib
+per-handler lock (holding it across an inline send would deadlock
+with code logging from inside the send thread). Inline records reach
+their sink ahead of older queued ones — formatters should include
+`%(asctime)s`.
+
 ## Handler class hierarchy (`aiologging/handlers/`)
 
 ```
 AsyncHandlerABC (types.py)
 └── AsyncHandler (base.py)
     │     level/filters/formatter, retry with optional
-    │     retry_strategy, rate limiting, metrics, close()
+    │     retry_strategy, rate limiting, metrics, close(),
+    │     emit_sync (opt-in synchronous delivery hook used by
+    │     the bridge's inline path; base returns False)
     ├── AsyncStreamHandler (stream.py)
     │   └── AsyncStandardStreamHandler
     ├── AsyncFileHandler (file.py, requires aiofiles)

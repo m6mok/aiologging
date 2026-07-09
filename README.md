@@ -113,6 +113,15 @@ aiologging.captureStdlib()
 
 Bridged records are routed through the aiologging hierarchy under the same logger name, so per-name handlers and propagation work as usual. The bridge is thread-safe and buffers records emitted before the event loop starts.
 
+For alerting channels the bridge can also deliver critical records **inline** — synchronously, before they are queued — so the pager message leaves even when the record is emitted right before the process dies (an `except` block before a `raise`, a SIGTERM handler):
+
+```python
+aiologging.captureStdlib(inline_level=logging.ERROR)
+# or: aiologging.basicConfig(capture_stdlib=True, inline_level=logging.ERROR)
+```
+
+Records at or above `inline_level` are offered to handlers that support synchronous delivery (`emit_sync`, currently `AsyncTelegramHandler`, which POSTs via `urllib` in a helper thread joined with the deadline). The inline path is bounded — `inline_timeout` (default 3 s) per record, plus a token bucket of `inline_burst` sends (default 1) refilling at `inline_rate` per minute (default 2) — so a burst of errors cannot stall the calling thread. On any failure the record simply stays on the normal queue path; a handler that received it inline is skipped by its queue worker, other handlers deliver as usual. Note the FIFO trade-off: an inline record reaches the chat ahead of older queued records — include `%(asctime)s` in the formatter so readers can reorder.
+
 ## Examples
 
 Complete runnable examples live in the [examples/](examples/) directory:
@@ -124,6 +133,7 @@ Complete runnable examples live in the [examples/](examples/) directory:
 - [examples/telegram_logging.py](examples/telegram_logging.py) — sending records to a Telegram chat, including rate-limit handling (includes a local Bot API stand-in)
 - [examples/config_usage.py](examples/config_usage.py) — configuring loggers from a dictionary
 - [examples/emergency_flush.py](examples/emergency_flush.py) — delivery at process death: `shutdown(timeout=...)`, `flush_sync`, the automatic atexit drain
+- [examples/inline_alerts.py](examples/inline_alerts.py) — inline (synchronous) Telegram delivery of critical bridged records via `captureStdlib(inline_level=...)`
 
 ## Handlers
 
@@ -464,13 +474,13 @@ Sync (identical to `logging.Logger`):
 ### Module Functions
 
 - `getLogger(name=None)` — hierarchical loggers; no name returns the root logger
-- `basicConfig(level, format, datefmt, handlers, force, queue_size, overflow, delivery, capture_stdlib, atexit_flush)`
+- `basicConfig(level, format, datefmt, handlers, force, queue_size, overflow, delivery, capture_stdlib, inline_level, atexit_flush)`
 - `await flush(timeout=None)` — wait until every queued record has been handled
 - `await shutdown(timeout=None)` — drain the queue and close all handlers
 - `flush_sync(timeout=5.0)` — synchronous emergency drain without a running loop; returns `True` when fully delivered
 - `set_atexit_flush(timeout)` — budget of the automatic drain at interpreter exit (default 2.0; 0 disables)
 - `disable(level)` — like `logging.disable`
-- `captureStdlib(capture=True, level=NOTSET)` — bridge stdlib logging records
+- `captureStdlib(capture=True, level=NOTSET, inline_level=None, inline_timeout=3.0, inline_burst=1, inline_rate=2.0)` — bridge stdlib logging records; `inline_level` enables synchronous inline delivery of critical records
 - `await debug/info/warning/error/exception/critical/log(...)` — root-logger convenience coroutines
 
 ### Handler Classes
