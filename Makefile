@@ -1,7 +1,7 @@
 .PHONY: all setup-envs test-all mypy-all quick-test quick-mypy check-versions clean help
 
 # Версии Python для тестирования через uv
-PYTHON_VERSIONS = 3.9 3.10 3.11 3.12
+PYTHON_VERSIONS = 3.9 3.10 3.11 3.12 3.13 3.14
 
 # Цель по умолчанию
 all: test-all mypy-all

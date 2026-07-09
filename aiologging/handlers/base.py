@@ -24,7 +24,7 @@ from ..types import (
     RateLimiter,
     RetryStrategy,
 )
-from ..utils import handle_error_with_fallback
+from ..utils import LazyLock, handle_error_with_fallback
 
 
 class AsyncHandlerMetrics:
@@ -112,7 +112,7 @@ class AsyncHandler(AsyncHandlerABC):
         self._retry_delay = retry_delay or self._default_retry_delay
 
         self._closed = False
-        self._lock = asyncio.Lock()
+        self._lock = LazyLock()
 
         # Metrics collection
         self._metrics = AsyncHandlerMetrics(enable_metrics)
@@ -465,7 +465,7 @@ class BufferedAsyncHandler(AsyncHandler):
         self._buffer: List[LogRecord] = []
         self._priority_buffer: List[LogRecord] = []
         self._flush_task: Optional[asyncio.Task[None]] = None
-        self._buffer_lock = asyncio.Lock()
+        self._buffer_lock = LazyLock()
 
         # Adaptive buffering metrics
         self._avg_processing_time = 0.0

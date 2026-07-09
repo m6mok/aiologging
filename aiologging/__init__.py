@@ -1,28 +1,35 @@
 """
 aiologging - Asynchronous logging library for Python.
 
-This library provides asynchronous logging with full compatibility to the
-standard logging module but with async methods requiring await.
+The API mirrors the standard logging module; the logging methods are
+coroutines. Records are enqueued at the call site and written by a
+background consumer, so ``await logger.info(...)`` never waits for
+handler I/O (configurable via ``delivery``).
 
 Basic usage:
     import aiologging
 
-    async with aiologging.getLogger("app") as logger:
-        await logger.info("Hello, world!")
+    logger = aiologging.getLogger(__name__)
+    await logger.info("Hello, world!")
+
+    # once, at application exit:
+    await aiologging.shutdown()
 
 Features:
-- Full compatibility with standard logging module API
-- Async handlers for streams, files, and HTTP endpoints
-- File rotation support (size and time-based)
-- Extensible authentication for HTTP handlers
-- Optional dependencies for different use cases
+- logging-compatible API (methods, hierarchy, levels, filters)
+- Background consumer: handler I/O off the calling coroutine's path
+- Configurable delivery ("enqueue"/"await") and overflow policy
+  ("block"/"drop_new"/"drop_old")
+- Bridge for stdlib logging records (captureStdlib) so third-party
+  library logs flow through the same async handlers
+- Async handlers for streams, files (with rotation) and HTTP endpoints
 - Strict type checking with mypy support
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any, List, Optional, Union
 
 from .exceptions import (
     AiologgingError,
@@ -41,12 +48,24 @@ from .exceptions import (
 from .logger import (
     AsyncLogger,
     AsyncLoggerManager,
+    DeliveryMode,
+    OverflowPolicy,
+    _logger_manager,
+    critical,
+    debug,
+    disable,
+    error,
+    exception,
+    fatal,
+    flush,
     getLogger,
-    getLoggerContext,
-    getRootLogger,
-    log_async,
+    info,
+    log,
     shutdown,
+    warn,
+    warning,
 )
+from .bridge import StdlibBridgeHandler, captureStdlib
 from .config import (
     ConfigManager,
     get_config_manager,
@@ -91,14 +110,16 @@ from .handlers import (
 
 # Re-export logging levels for compatibility
 CRITICAL = logging.CRITICAL
+FATAL = logging.FATAL
 ERROR = logging.ERROR
 WARNING = logging.WARNING
+WARN = logging.WARN
 INFO = logging.INFO
 DEBUG = logging.DEBUG
 NOTSET = logging.NOTSET
 
 # Version information
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 __author__ = "Evgenii Dementev (m6mok)"
 __license__ = "MIT"
 
@@ -108,11 +129,26 @@ __all__ = [
     "AsyncLogger",
     "AsyncLoggerManager",
     "getLogger",
-    "getLoggerContext",
-    "getRootLogger",
-    "log_async",
-    "shutdown",
     "basicConfig",
+    "shutdown",
+    "flush",
+    "disable",
+    # Root-logger convenience coroutines (mirror logging module funcs)
+    "debug",
+    "info",
+    "warning",
+    "warn",
+    "error",
+    "exception",
+    "critical",
+    "fatal",
+    "log",
+    # Stdlib bridge
+    "StdlibBridgeHandler",
+    "captureStdlib",
+    # Delivery/overflow types
+    "DeliveryMode",
+    "OverflowPolicy",
     # Convenience factories
     "create_stream_handler",
     "create_file_handler",
@@ -170,8 +206,10 @@ __all__ = [
     "TimeInterval",
     # Logging levels
     "CRITICAL",
+    "FATAL",
     "ERROR",
     "WARNING",
+    "WARN",
     "INFO",
     "DEBUG",
     "NOTSET",
@@ -263,64 +301,65 @@ def create_http_handler(
     )
 
 
-# Module-level configuration
-class Config:
-    """Global configuration for aiologging."""
-
-    def __init__(self) -> None:
-        self.default_level: int = INFO
-        self.default_format: str = (
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        )
-        self.default_date_format: str = "%Y-%m-%d %H:%M:%S"
-
-    def get_default_formatter(self) -> logging.Formatter:
-        """Get the default formatter."""
-        return logging.Formatter(self.default_format, self.default_date_format)
-
-
-# Global configuration instance
-config = Config()
-
-
 def basicConfig(
-    level: int = INFO,
+    level: Optional[Union[int, str]] = None,
     format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     datefmt: str = "%Y-%m-%d %H:%M:%S",
-    handlers: Optional[list[AsyncHandler]] = None,
+    handlers: Optional[List[AsyncHandler]] = None,
+    force: bool = False,
+    queue_size: Optional[int] = None,
+    overflow: Optional[OverflowPolicy] = None,
+    delivery: Optional[DeliveryMode] = None,
+    capture_stdlib: Optional[bool] = None,
 ) -> None:
     """
-    Configure basic logging for aiologging.
+    Configure the root logger, like ``logging.basicConfig``.
 
-    This function is similar to logging.basicConfig() but for async loggers.
+    Handlers are attached only when the root logger has none yet
+    (or when ``force`` is True, which discards the existing ones);
+    ``level`` is applied whenever given.
 
     Args:
-        level: The default logging level
+        level: The root logger level (number or name)
         format: The log message format
         datefmt: The date format
-        handlers: List of handlers to add to the root logger
+        handlers: Handlers for the root logger; a stderr stream handler
+            is created when omitted
+        force: Remove existing root handlers before configuring
+        queue_size: Capacity of the record queue (applies to queues
+            created afterwards)
+        overflow: What to do when the queue is full: "block" (default),
+            "drop_new" or "drop_old"
+        delivery: Default guarantee of ``await logger.info(...)``:
+            "enqueue" (default) resolves once the record is queued,
+            "await" resolves after handlers processed it
+        capture_stdlib: True routes stdlib logging records through
+            aiologging handlers (see :func:`captureStdlib`)
     """
-    # Update global config
-    config.default_level = level
-    config.default_format = format
-    config.default_date_format = datefmt
+    manager = _logger_manager
+    if queue_size is not None:
+        manager.queue_size = queue_size
+    if overflow is not None:
+        manager.overflow = overflow
+    if delivery is not None:
+        manager.delivery = delivery
 
-    # Configure root logger
-    root_logger = getRootLogger()
-    root_logger.setLevel(level)
+    root = manager.root
+    if force:
+        for existing in list(root.handlers):
+            root.removeHandler(existing)
 
-    # Create default formatter
-    formatter = logging.Formatter(format, datefmt)
-
-    # Add handlers
-    if handlers:
+    if not root.handlers:
+        formatter = logging.Formatter(format, datefmt)
+        if handlers is None:
+            handlers = [create_stream_handler(formatter=formatter)]
         for handler in handlers:
             if handler.formatter is None:
                 handler.setFormatter(formatter)
-            root_logger.addHandler(handler)
-    else:
-        # Add default stream handler if none provided
-        stream_handler = create_stream_handler(
-            level=level, formatter=formatter
-        )
-        root_logger.addHandler(stream_handler)
+            root.addHandler(handler)
+
+    if level is not None:
+        root.setLevel(level)
+
+    if capture_stdlib is not None:
+        captureStdlib(capture_stdlib)

@@ -15,6 +15,7 @@ from typing import Optional, TextIO, Union, Protocol, runtime_checkable
 
 from ..exceptions import HandlerError
 from ..types import ErrorHandler, FilterProtocol, FormatterProtocol
+from ..utils import LazyLock
 from .base import AsyncHandler
 
 
@@ -87,7 +88,7 @@ class AsyncStreamHandler(AsyncHandler):
         self._is_async_stream = hasattr(stream, "drain") and hasattr(
             stream, "write"
         )
-        self._write_lock = asyncio.Lock()
+        self._write_lock = LazyLock()
 
     async def _emit(self, record: LogRecord, formatted_message: str) -> None:
         """

@@ -1,407 +1,722 @@
 """
-Tests for the AsyncLogger class.
+Tests for the AsyncLogger class, the manager queue and the module API.
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+from logging import LogRecord
+from typing import Any, List, Optional
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiologging
-from aiologging import AsyncLogger, getLogger, getLoggerContext
+from aiologging import AsyncLogger, getLogger
 from aiologging.exceptions import ContextError
+from aiologging.handlers.base import AsyncHandler
 from aiologging.handlers.stream import AsyncStreamHandler
+from aiologging.logger import AsyncLoggerManager
 
 
-class TestAsyncLogger:
-    """Test cases for AsyncLogger class."""
+class RecordingHandler(AsyncHandler):
+    """Handler that stores handled records in memory."""
 
-    def test_logger_initialization(self) -> None:
-        """Test logger initialization."""
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.records: List[LogRecord] = []
+
+    async def _emit(self, record: LogRecord, formatted_message: str) -> None:
+        self.records.append(record)
+
+    @property
+    def messages(self) -> List[str]:
+        return [record.getMessage() for record in self.records]
+
+
+class BlockingHandler(RecordingHandler):
+    """Handler that blocks until released; used for overflow tests.
+
+    Uses a threading.Event because on Python 3.9 an asyncio.Event
+    created outside a running loop binds to the wrong loop.
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.release = threading.Event()
+
+    async def _emit(self, record: LogRecord, formatted_message: str) -> None:
+        while not self.release.is_set():
+            await asyncio.sleep(0.001)
+        self.records.append(record)
+
+
+def make_logger(
+    name: str = "test",
+    level: int = logging.DEBUG,
+    delivery: Optional[str] = "await",
+    **kwargs: Any,
+) -> tuple[AsyncLogger, RecordingHandler]:
+    """Create a standalone logger with a recording handler."""
+    handler = RecordingHandler()
+    logger = AsyncLogger(
+        name,
+        level=level,
+        handlers=[handler],
+        propagate=False,
+        delivery=delivery,  # type: ignore[arg-type]
+        **kwargs,
+    )
+    return logger, handler
+
+
+async def drain_until_blocked(manager: AsyncLoggerManager) -> None:
+    """Yield until the consumer has taken everything off the queue."""
+    for _ in range(50):
+        queue = manager._queue
+        if queue is not None and queue.qsize() == 0:
+            return
+        await asyncio.sleep(0)
+
+
+class TestLoggerConfiguration:
+    """Sync configuration API, mirroring logging.Logger."""
+
+    def test_initialization_defaults(self) -> None:
         logger = AsyncLogger("test_logger")
         assert logger.name == "test_logger"
         assert logger.level == logging.NOTSET
         assert logger.handlers == []
+        assert logger.filters == []
+        assert logger.parent is None
         assert logger.propagate is True
         assert logger.disabled is False
-        assert logger._closed is False
 
-    def test_logger_with_parameters(self) -> None:
-        """Test logger initialization with parameters."""
-        handler = AsyncStreamHandler()
-        logger = AsyncLogger(
-            "test_logger",
-            level=logging.INFO,
-            handlers=[handler],
-            propagate=False,
-            disabled=True,
-        )
-        assert logger.name == "test_logger"
-        assert logger.level == logging.INFO
-        assert logger.handlers == [handler]
-        assert logger.propagate is False
-        assert logger.disabled is True
-
-    def test_set_level(self) -> None:
-        """Test setting logger level."""
+    def test_set_level_accepts_int_and_name(self) -> None:
         logger = AsyncLogger("test_logger")
         logger.setLevel(logging.DEBUG)
         assert logger.level == logging.DEBUG
+        logger.setLevel("ERROR")
+        assert logger.level == logging.ERROR
 
-    def test_get_effective_level(self) -> None:
-        """Test getting effective level."""
+    def test_set_level_rejects_garbage(self) -> None:
         logger = AsyncLogger("test_logger")
-        assert logger.getLevel() == logging.WARNING  # Default level
+        with pytest.raises(ValueError):
+            logger.setLevel("NO_SUCH_LEVEL")
+        with pytest.raises(TypeError):
+            logger.setLevel(3.5)  # type: ignore[arg-type]
 
-        logger.setLevel(logging.INFO)
-        assert logger.getLevel() == logging.INFO
+    def test_get_effective_level_walks_hierarchy(self) -> None:
+        parent = AsyncLogger("parent", level=logging.ERROR)
+        child = AsyncLogger("parent.child")
+        child.parent = parent
 
-        # Test with parent
-        parent = AsyncLogger("parent")
-        parent.setLevel(logging.ERROR)
-        logger.setParent(parent)
-        logger.level = logging.NOTSET
-        assert logger.getLevel() == logging.ERROR
+        assert child.getEffectiveLevel() == logging.ERROR
+        child.setLevel(logging.INFO)
+        assert child.getEffectiveLevel() == logging.INFO
+        assert AsyncLogger("orphan").getEffectiveLevel() == logging.NOTSET
 
     def test_is_enabled_for(self) -> None:
-        """Test level checking."""
-        logger = AsyncLogger("test_logger")
-        logger.setLevel(logging.INFO)
+        logger = AsyncLogger("test_logger", level=logging.INFO)
+        assert logger.isEnabledFor(logging.INFO)
+        assert logger.isEnabledFor(logging.WARNING)
+        assert not logger.isEnabledFor(logging.DEBUG)
 
-        assert logger.isEnabledFor(logging.INFO) is True
-        assert logger.isEnabledFor(logging.WARNING) is True
-        assert logger.isEnabledFor(logging.DEBUG) is False
+        logger.disabled = True
+        assert not logger.isEnabledFor(logging.CRITICAL)
 
-        # Test disabled logger
-        logger.disable()
-        assert logger.isEnabledFor(logging.CRITICAL) is False
+    def test_module_level_disable(self) -> None:
+        logger = AsyncLogger("test_logger", level=logging.DEBUG)
+        aiologging.disable(logging.ERROR)
+        assert not logger.isEnabledFor(logging.ERROR)
+        assert logger.isEnabledFor(logging.CRITICAL)
 
     def test_handler_management(self) -> None:
-        """Test adding and removing handlers."""
         logger = AsyncLogger("test_logger")
         handler1 = AsyncStreamHandler()
         handler2 = AsyncStreamHandler()
 
         logger.addHandler(handler1)
-        assert handler1 in logger.handlers
-
+        logger.addHandler(handler1)  # no duplicates
         logger.addHandler(handler2)
-        assert len(logger.handlers) == 2
+        assert logger.handlers == [handler1, handler2]
 
         logger.removeHandler(handler1)
-        assert handler1 not in logger.handlers
-        assert handler2 in logger.handlers
+        assert logger.handlers == [handler2]
+
+    def test_has_handlers_walks_hierarchy(self) -> None:
+        parent = AsyncLogger("parent")
+        child = AsyncLogger("parent.child")
+        child.parent = parent
+
+        assert not child.hasHandlers()
+        parent.addHandler(AsyncStreamHandler())
+        assert child.hasHandlers()
+
+        child.propagate = False
+        assert not child.hasHandlers()
 
     def test_filter_management(self) -> None:
-        """Test adding and removing filters."""
         logger = AsyncLogger("test_logger")
         filter1 = MagicMock()
         filter2 = MagicMock()
 
         logger.addFilter(filter1)
-        assert filter1 in logger._filters
-
         logger.addFilter(filter2)
-        assert len(logger._filters) == 2
+        assert logger.filters == [filter1, filter2]
 
         logger.removeFilter(filter1)
-        assert filter1 not in logger._filters
-        assert filter2 in logger._filters
+        assert logger.filters == [filter2]
 
-    def test_formatter_management(self) -> None:
-        """Test setting and getting formatter."""
-        logger = AsyncLogger("test_logger")
-        formatter = MagicMock()
+    def test_repr(self) -> None:
+        logger = AsyncLogger("test_logger", level=logging.INFO)
+        assert repr(logger) == "<AsyncLogger test_logger (INFO)>"
 
-        logger.setFormatter(formatter)
-        assert logger.getFormatter() == formatter
 
-    def test_parent_child_relationship(self) -> None:
-        """Test parent-child logger relationships."""
-        parent = AsyncLogger("parent")
-        child = AsyncLogger("parent.child")
+class TestLogMethods:
+    """The async logging methods."""
 
-        child.setParent(parent)
-        assert child.getParent() == parent
-        assert parent._children["parent.child"] == child
-        assert child.propagateToParent() is True
+    async def test_all_levels(self) -> None:
+        logger, handler = make_logger()
 
-        child.propagate = False
-        assert child.propagateToParent() is False
+        await logger.debug("debug")
+        await logger.info("info")
+        await logger.warning("warning")
+        await logger.error("error")
+        await logger.critical("critical")
+        await logger.warn("warn alias")
+        await logger.fatal("fatal alias")
+        await logger.log(logging.INFO, "explicit level")
 
-    @pytest.mark.asyncio
-    async def test_log_methods(self) -> None:
-        """Test all log methods."""
-        logger = AsyncLogger("test_logger")
-        logger.setLevel(logging.DEBUG)
+        assert handler.messages == [
+            "debug",
+            "info",
+            "warning",
+            "error",
+            "critical",
+            "warn alias",
+            "fatal alias",
+            "explicit level",
+        ]
+        levels = [record.levelno for record in handler.records]
+        assert levels[:5] == [
+            logging.DEBUG,
+            logging.INFO,
+            logging.WARNING,
+            logging.ERROR,
+            logging.CRITICAL,
+        ]
+        assert levels[5] == logging.WARNING
+        assert levels[6] == logging.CRITICAL
 
-        handler = AsyncMock(spec=AsyncStreamHandler)
-        handler.handle = AsyncMock()
-        logger.addHandler(handler)
+    async def test_log_rejects_non_int_level(self) -> None:
+        logger, _ = make_logger()
+        with pytest.raises(TypeError):
+            await logger.log("INFO", "nope")  # type: ignore[arg-type]
 
-        # Test all log levels
-        await self._test_log_levels(logger)
+    async def test_level_filtering(self) -> None:
+        logger, handler = make_logger(level=logging.WARNING)
+        await logger.debug("dropped")
+        await logger.info("dropped")
+        await logger.warning("kept")
+        assert handler.messages == ["kept"]
 
-        # Test aliases
-        await self._test_log_aliases(logger)
+    async def test_percent_formatting_is_eager(self) -> None:
+        logger, handler = make_logger()
+        payload = {"key": "before"}
+        await logger.info("value: %s", payload)
+        payload["key"] = "after"
 
-        # Test exception logging
-        await self._test_exception_logging(logger)
+        record = handler.records[0]
+        assert record.getMessage() == "value: {'key': 'before'}"
+        assert record.args is None  # frozen for the queue
 
-        # Verify all calls were made
-        assert handler.handle.call_count == 8
+    async def test_extra_attributes(self) -> None:
+        logger, handler = make_logger()
+        await logger.info("msg", extra={"custom_attr": "custom_value"})
+        assert handler.records[0].custom_attr == "custom_value"
 
-    async def _test_log_levels(self, logger: AsyncLogger) -> None:
-        """Test all log levels."""
-        await logger.debug("Debug message")
-        await logger.info("Info message")
-        await logger.warning("Warning message")
-        await logger.error("Error message")
-        await logger.critical("Critical message")
+    async def test_extra_rejects_reserved_keys(self) -> None:
+        logger, _ = make_logger()
+        with pytest.raises(KeyError):
+            await logger.info("msg", extra={"message": "clash"})
+        with pytest.raises(KeyError):
+            await logger.info("msg", extra={"lineno": 1})
 
-    async def _test_log_aliases(self, logger: AsyncLogger) -> None:
-        """Test log method aliases."""
-        await logger.warn("Warning message (alias)")
-        await logger.fatal("Fatal message (alias)")
-
-    async def _test_exception_logging(self, logger: AsyncLogger) -> None:
-        """Test exception logging."""
+    async def test_exception_captures_current_exc(self) -> None:
+        logger, handler = make_logger()
         try:
-            raise ValueError("Test exception")
+            raise ValueError("boom")
         except ValueError:
-            await logger.exception("Exception occurred")
+            await logger.exception("failed")
 
-    @pytest.mark.asyncio
-    async def test_log_with_args_and_kwargs(self) -> None:
-        """Test logging with format arguments and keyword arguments."""
-        logger = AsyncLogger("test_logger")
-        logger.setLevel(logging.DEBUG)
+        record = handler.records[0]
+        assert record.levelno == logging.ERROR
+        # exc_info is rendered into exc_text when the record is frozen
+        assert record.exc_info is None
+        assert record.exc_text is not None
+        assert "ValueError: boom" in record.exc_text
 
-        handler = AsyncMock(spec=AsyncStreamHandler)
-        handler.handle = AsyncMock()
-        logger.addHandler(handler)
+    async def test_exc_info_instance(self) -> None:
+        logger, handler = make_logger()
+        await logger.error("failed", exc_info=RuntimeError("direct"))
+        assert "RuntimeError: direct" in (handler.records[0].exc_text or "")
 
-        await logger.info("Message with %s", "argument")
-        await logger.error("Error: %s", "details", extra={"key": "value"})
+    async def test_caller_info(self) -> None:
+        logger, handler = make_logger()
+        await logger.info("who called")
+        record = handler.records[0]
+        assert record.funcName == "test_caller_info"
+        assert record.pathname == __file__
 
-        assert handler.handle.call_count == 2
+    async def test_stack_info(self) -> None:
+        logger, handler = make_logger()
+        await logger.info("with stack", stack_info=True)
+        stack = handler.records[0].stack_info
+        assert stack is not None
+        assert stack.startswith("Stack (most recent call last):")
 
-        # Check the log records
-        records = [call.args[0] for call in handler.handle.call_args_list]
-        assert records[0].getMessage() == "Message with argument"
-        assert records[1].getMessage() == "Error: details"
-        assert hasattr(records[1], "key")
-        assert records[1].key == "value"
+    async def test_disabled_logger_drops_records(self) -> None:
+        logger, handler = make_logger()
+        logger.disabled = True
+        await logger.info("dropped")
+        assert handler.records == []
 
-    @pytest.mark.asyncio
-    async def test_disabled_logger(self) -> None:
-        """Test that disabled logger doesn't process records."""
-        logger = AsyncLogger("test_logger")
-        logger.disable()
-
-        handler = AsyncMock(spec=AsyncStreamHandler)
-        handler.handle = AsyncMock()
-        logger.addHandler(handler)
-
-        await logger.info("This should not be logged")
-
-        handler.handle.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_closed_logger_error(self) -> None:
-        """Test that closed logger doesn't process records."""
-        logger = AsyncLogger("test_logger")
+    async def test_closed_logger_drops_records(self) -> None:
+        logger, handler = make_logger()
         await logger.close()
+        await logger.info("dropped")
+        assert handler.records == []
 
-        handler = AsyncMock(spec=AsyncStreamHandler)
-        handler.handle = AsyncMock()
-        logger.addHandler(handler)
+    async def test_logger_filter_drops_records(self) -> None:
+        logger, handler = make_logger()
+        reject = MagicMock()
+        reject.filter.return_value = False
+        logger.addFilter(reject)
 
-        await logger.info("This should not be logged")
-        handler.handle.assert_not_called()
+        await logger.info("dropped")
+        assert handler.records == []
+        reject.filter.assert_called_once()
 
-    @pytest.mark.asyncio
-    async def test_context_manager(self) -> None:
-        """Test logger as context manager."""
-        logger = AsyncLogger("test_logger")
+    async def test_handler_error_reported_to_stderr(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        class ExplodingHandler(AsyncHandler):
+            async def handle(self, record: LogRecord) -> None:
+                raise RuntimeError("handler error")
 
-        async with logger as ctx:
-            assert ctx is logger
-            assert logger._closed is False
-
-        assert logger._closed is True
-
-    @pytest.mark.asyncio
-    async def test_context_manager_error_on_closed(self) -> None:
-        """Test context manager error on closed logger."""
-        logger = AsyncLogger("test_logger")
-        await logger.close()
-
-        with pytest.raises(ContextError):
-            async with logger:
+            async def _emit(
+                self, record: LogRecord, formatted_message: str
+            ) -> None:  # pragma: no cover
                 pass
 
-    @pytest.mark.asyncio
-    async def test_filter_application(self) -> None:
-        """Test filter application."""
-        logger = AsyncLogger("test_logger")
-        logger.setLevel(logging.DEBUG)  # Set level to DEBUG to allow INFO messages
+        logger = AsyncLogger(
+            "test",
+            level=logging.DEBUG,
+            handlers=[ExplodingHandler()],
+            propagate=False,
+            delivery="await",
+        )
+        await logger.info("message")
+        assert "Error in handler ExplodingHandler" in capsys.readouterr().err
 
-        # Create a filter that rejects all records
-        filter_mock = MagicMock()
-        filter_mock.filter.return_value = False
-        logger.addFilter(filter_mock)
+    async def test_rate_limiter_drops_records(self) -> None:
+        async def deny() -> bool:
+            return False
 
-        handler = AsyncMock(spec=AsyncStreamHandler)
-        handler.handle = AsyncMock()
+        logger, handler = make_logger(
+            rate_limiter=deny, enable_metrics=True
+        )
+        await logger.info("dropped")
+        assert handler.records == []
+        assert logger.get_metrics()["records_dropped"] == 1
+
+
+class TestPropagation:
+    """Record propagation through the hierarchy."""
+
+    async def test_propagates_to_parent_handlers(self) -> None:
+        parent, parent_handler = make_logger("parent")
+        child = AsyncLogger(
+            "parent.child", level=logging.DEBUG, delivery="await"
+        )
+        child.parent = parent
+
+        await child.info("propagated")
+        assert parent_handler.messages == ["propagated"]
+
+    async def test_propagate_false_stops_walk(self) -> None:
+        parent, parent_handler = make_logger("parent")
+        child, child_handler = make_logger("parent.child")
+        child.parent = parent
+        child.propagate = False
+
+        await child.info("local only")
+        assert child_handler.messages == ["local only"]
+        assert parent_handler.messages == []
+
+    async def test_closed_parent_is_skipped(self) -> None:
+        parent, parent_handler = make_logger("parent")
+        await parent.close()
+
+        child, child_handler = make_logger("parent.child")
+        child.propagate = True
+        child.parent = parent
+
+        await child.info("still works")
+        assert child_handler.messages == ["still works"]
+
+    async def test_last_resort_stderr(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        logger = AsyncLogger(
+            "test.nohandlers",
+            level=logging.DEBUG,
+            propagate=False,
+            delivery="await",
+        )
+        await logger.warning("nowhere to go")
+        await logger.debug("below WARNING is silent")
+        err = capsys.readouterr().err
+        assert "nowhere to go" in err
+        assert "below WARNING is silent" not in err
+
+
+class TestDeliveryModes:
+    """The delivery extension: what the await guarantees."""
+
+    async def test_enqueue_returns_before_handling(self) -> None:
+        handler = BlockingHandler()
+        logger = AsyncLogger(
+            "test.enqueue",
+            level=logging.DEBUG,
+            handlers=[handler],
+            propagate=False,
+            delivery="enqueue",
+        )
+
+        await logger.info("queued")  # must not block on the handler
+        assert handler.records == []
+
+        handler.release.set()
+        await aiologging.flush()
+        assert handler.messages == ["queued"]
+
+    async def test_await_resolves_after_handling(self) -> None:
+        logger, handler = make_logger(delivery="await")
+        await logger.info("handled")
+        assert handler.messages == ["handled"]
+
+    async def test_manager_default_delivery(self) -> None:
+        manager = AsyncLoggerManager(delivery="await")
+        handler = RecordingHandler()
+        logger = manager.getLogger("app")
+        logger.setLevel(logging.DEBUG)
         logger.addHandler(handler)
 
-        await logger.info("This should be filtered")
+        await logger.info("handled")
+        assert handler.messages == ["handled"]
+        await manager.shutdown()
 
-        handler.handle.assert_not_called()
-        filter_mock.filter.assert_called()
-
-    @pytest.mark.asyncio
-    async def test_handler_error_handling(self) -> None:
-        """Test error handling in handlers."""
-        logger = AsyncLogger("test_logger")
-        logger.setLevel(logging.DEBUG)  # Set level to DEBUG to allow INFO messages
-
-        # Create a handler that raises an exception
-        handler = AsyncMock(spec=AsyncStreamHandler)
-        handler.handle.side_effect = Exception("Handler error")
+    async def test_context_manager_flushes_without_closing(self) -> None:
+        handler = RecordingHandler()
+        logger = getLogger("test.ctx")
+        logger.setLevel(logging.DEBUG)
         logger.addHandler(handler)
 
-        # This should not raise an exception, but should log to stderr
-        with patch("sys.stderr") as stderr:
-            await logger.info("Test message")
-            # Check that stderr.write was called with error message
-            stderr.write.assert_called()
-            # Get the call arguments and verify it contains error info
-            call_args = stderr.write.call_args[0][0]
-            assert "Error in handler" in call_args
+        async with logger:
+            await logger.info("inside")
 
-    @pytest.mark.asyncio
-    async def test_log_record_creation(self) -> None:
-        """Test log record creation with proper attributes."""
-        logger = AsyncLogger("test_logger")
-        logger.setLevel(logging.DEBUG)  # Set level to DEBUG to allow INFO messages
+        assert handler.messages == ["inside"]
+        assert not logger._closed
+        # the same logger keeps working after the with-block
+        await logger.info("after")
+        await aiologging.flush()
+        assert handler.messages == ["inside", "after"]
 
-        handler = AsyncMock(spec=AsyncStreamHandler)
-        handler.handle = AsyncMock()
+    async def test_context_manager_rejects_closed_logger(self) -> None:
+        logger, _ = make_logger()
+        await logger.close()
+        with pytest.raises(ContextError):
+            async with logger:
+                pass  # pragma: no cover
+
+
+class TestOverflowPolicies:
+    """Bounded queue behaviour."""
+
+    async def _stuck_manager(
+        self, overflow: str
+    ) -> tuple[AsyncLoggerManager, AsyncLogger, BlockingHandler]:
+        """Manager with queue_size=1 whose consumer is blocked."""
+        manager = AsyncLoggerManager(
+            queue_size=1, overflow=overflow  # type: ignore[arg-type]
+        )
+        handler = BlockingHandler()
+        logger = manager.getLogger("app")
+        logger.setLevel(logging.DEBUG)
         logger.addHandler(handler)
 
-        await logger.info("Test message", extra={"custom_attr": "custom_value"})
+        await logger.info("r1")  # consumer takes it and blocks
+        await drain_until_blocked(manager)
+        await logger.info("r2")  # fills the single queue slot
+        return manager, logger, handler
 
-        # Check that handle was called
-        handler.handle.assert_called_once()
-        # Get the record from the call
-        record = handler.handle.call_args[0][0]
-        assert record.name == "test_logger"
-        assert record.levelno == logging.INFO
-        assert record.levelname == "INFO"
-        assert record.getMessage() == "Test message"
-        assert hasattr(record, "custom_attr")
-        assert record.custom_attr == "custom_value"
+    async def test_drop_new(self) -> None:
+        manager, logger, handler = await self._stuck_manager("drop_new")
+        await logger.info("r3")  # queue full -> discarded
 
-    def test_logger_repr(self) -> None:
-        """Test logger string representation."""
-        logger = AsyncLogger("test_logger")
-        logger.setLevel(logging.INFO)
-        handler = AsyncStreamHandler()
+        handler.release.set()
+        await manager.flush()
+        assert handler.messages == ["r1", "r2"]
+        assert manager.get_metrics()["records_dropped"] == 1
+        await manager.shutdown()
+
+    async def test_drop_old(self) -> None:
+        manager, logger, handler = await self._stuck_manager("drop_old")
+        await logger.info("r3")  # queue full -> r2 discarded
+
+        handler.release.set()
+        await manager.flush()
+        assert handler.messages == ["r1", "r3"]
+        assert manager.get_metrics()["records_dropped"] == 1
+        await manager.shutdown()
+
+    async def test_block_waits_for_space(self) -> None:
+        manager, logger, handler = await self._stuck_manager("block")
+
+        blocked = asyncio.ensure_future(logger.info("r3"))
+        await asyncio.sleep(0.01)
+        assert not blocked.done()  # queue is full, producer waits
+
+        handler.release.set()
+        await asyncio.wait_for(blocked, timeout=2)
+        await manager.flush()
+        assert handler.messages == ["r1", "r2", "r3"]
+        assert manager.get_metrics()["records_dropped"] == 0
+        await manager.shutdown()
+
+
+class TestLifecycle:
+    """Lazy start, flush, shutdown, loop change."""
+
+    async def test_consumer_starts_lazily(self) -> None:
+        manager = AsyncLoggerManager()
+        assert manager.get_metrics()["consumer_running"] == 0
+
+        logger = manager.getLogger("app")
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(RecordingHandler())
+        await logger.info("first record")
+
+        assert manager.get_metrics()["consumer_running"] == 1
+        await manager.shutdown()
+        assert manager.get_metrics()["consumer_running"] == 0
+
+    async def test_flush_drains_queue(self) -> None:
+        handler = RecordingHandler()
+        logger = getLogger("test.flush")
+        logger.setLevel(logging.DEBUG)
         logger.addHandler(handler)
 
-        repr_str = repr(logger)
-        assert "AsyncLogger" in repr_str
-        assert "test_logger" in repr_str
-        assert "INFO" in repr_str
-        assert "handlers=1" in repr_str
+        for i in range(100):
+            await logger.info("msg %d", i)
+        await aiologging.flush()
+        assert len(handler.records) == 100
+
+    async def test_shutdown_closes_handlers_and_resets(self) -> None:
+        handler = RecordingHandler()
+        logger = getLogger("test.shutdown")
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+        await logger.info("before shutdown")
+
+        await aiologging.shutdown()
+
+        assert handler.messages == ["before shutdown"]
+        assert handler.get_metrics()["closed"] is True
+        assert logger._closed
+
+        # the hierarchy is reset: fresh logger under the same name
+        fresh = getLogger("test.shutdown")
+        assert fresh is not logger
+        assert not fresh._closed
+
+    def test_loop_change_is_survived(self) -> None:
+        manager = AsyncLoggerManager()
+        handler = RecordingHandler()
+        logger = manager.getLogger("app")
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+
+        async def first_loop() -> None:
+            await logger.info("from loop 1")
+            await manager.flush()
+
+        async def second_loop() -> None:
+            await logger.info("from loop 2")
+            await manager.flush()
+
+        asyncio.run(first_loop())
+        asyncio.run(second_loop())
+
+        assert handler.messages == ["from loop 1", "from loop 2"]
+        asyncio.run(manager.shutdown())
+
+    def test_records_stuck_in_dead_loop_are_rescued(self) -> None:
+        manager = AsyncLoggerManager()
+        handler = BlockingHandler()
+        logger = manager.getLogger("app")
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(handler)
+
+        async def first_loop() -> None:
+            # both records enqueued; the consumer blocks on the first,
+            # the second stays in the queue when the loop dies
+            await logger.info("r1")
+            await logger.info("r2")
+
+        async def second_loop() -> None:
+            handler.release.set()
+            await manager.flush()
+
+        asyncio.run(first_loop())
+        asyncio.run(second_loop())
+
+        assert sorted(handler.messages) == ["r1", "r2"]
+        asyncio.run(manager.shutdown())
 
 
 class TestLoggerManager:
-    """Test cases for AsyncLoggerManager."""
+    """Hierarchy management."""
 
     def test_get_logger_singleton(self) -> None:
-        """Test that getLogger returns the same instance for the same name."""
-        logger1 = getLogger("test_manager")
-        logger2 = getLogger("test_manager")
+        assert getLogger("test_manager") is getLogger("test_manager")
 
-        assert logger1 is logger2
+    def test_get_logger_requires_string(self) -> None:
+        with pytest.raises(TypeError):
+            getLogger(123)  # type: ignore[arg-type]
 
-    def test_get_logger_hierarchy(self) -> None:
-        """Test logger hierarchy creation."""
+    def test_root_logger(self) -> None:
+        root = getLogger()
+        assert root.name == "root"
+        assert root.level == logging.WARNING
+        assert getLogger("root") is root
+        assert getLogger("") is root
+
+    def test_hierarchy_links(self) -> None:
         parent = getLogger("parent")
         child = getLogger("parent.child")
         grandchild = getLogger("parent.child.grandchild")
 
-        assert child.getParent() == parent
-        assert grandchild.getParent() == child
-        assert parent._children["parent.child"] == child
-        assert child._children["parent.child.grandchild"] == grandchild
+        assert child.parent is parent
+        assert grandchild.parent is child
+        assert parent.parent is getLogger()
 
-    def test_get_root_logger(self) -> None:
-        """Test getting the root logger."""
-        root = aiologging.getRootLogger()
-        assert root.name == "root"
+    def test_intermediate_loggers_created_eagerly(self) -> None:
+        leaf = getLogger("a.b.c")
+        assert leaf.parent is getLogger("a.b")
+        assert getLogger("a.b").parent is getLogger("a")
 
-        # Should return the same instance
-        root2 = aiologging.getRootLogger()
-        assert root is root2
+    def test_get_child(self) -> None:
+        assert getLogger("app").getChild("db") is getLogger("app.db")
+        assert getLogger("app").getChild("db.pool") is getLogger(
+            "app.db.pool"
+        )
+        assert getLogger().getChild("top") is getLogger("top")
 
-    @pytest.mark.asyncio
-    async def test_shutdown(self) -> None:
-        """Test logger manager shutdown."""
-        logger = getLogger("test_shutdown")
-        handler = AsyncMock(spec=AsyncStreamHandler)
-        handler.close = AsyncMock()
-        logger.addHandler(handler)
+    def test_get_children(self) -> None:
+        parent = getLogger("gc_parent")
+        child_a = getLogger("gc_parent.a")
+        child_b = getLogger("gc_parent.b")
+        getLogger("gc_parent.a.deep")
 
-        await aiologging.shutdown()
-
-        handler.close.assert_called_once()
-        assert logger._closed is True
+        assert parent.getChildren() == {child_a, child_b}
 
 
-class TestConvenienceFunctions:
-    """Test cases for convenience functions."""
+class TestModuleLevelFunctions:
+    """Root-logger convenience coroutines."""
 
-    @pytest.mark.asyncio
-    async def test_get_logger_context(self) -> None:
-        """Test getLoggerContext function."""
-        async with getLoggerContext("test_context") as logger:
-            assert logger.name == "test_context"
-            assert logger._closed is False
+    async def test_info_auto_configures_and_writes(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        aiologging.getLogger().setLevel(logging.INFO)
+        await aiologging.info("module-level %s", "info")
+        await aiologging.flush()
+        assert "module-level info" in capsys.readouterr().err
 
-        assert logger._closed is True
+    async def test_default_root_level_is_warning(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        await aiologging.info("hidden")
+        await aiologging.warning("visible")
+        await aiologging.flush()
+        err = capsys.readouterr().err
+        assert "hidden" not in err
+        assert "visible" in err
 
-    @pytest.mark.asyncio
-    async def test_log_async_function(self) -> None:
-        """Test log_async convenience function."""
-        with patch("aiologging.logger.getLoggerContext") as mock_context:
-            mock_logger = AsyncMock()
-            mock_context.return_value.__aenter__.return_value = mock_logger
+    async def test_exception_helper(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        try:
+            raise ValueError("root boom")
+        except ValueError:
+            await aiologging.exception("root failed")
+        await aiologging.flush()
+        err = capsys.readouterr().err
+        assert "root failed" in err
+        assert "ValueError: root boom" in err
 
-            await aiologging.log_async("test", logging.INFO, "Test message")
 
-            # Check that getLoggerContext was called with the right name
-            mock_context.assert_called_once_with("test")
-            # Check that the logger's log method was called
-            mock_logger.log.assert_called_once_with(logging.INFO, "Test message")
+class TestBasicConfig:
+    """basicConfig, like logging.basicConfig."""
 
-    def test_basic_config(self) -> None:
-        """Test basicConfig function."""
+    def test_configures_root_once(self) -> None:
         handler = AsyncStreamHandler()
-
         aiologging.basicConfig(
             level=logging.DEBUG,
             format="%(levelname)s: %(message)s",
             handlers=[handler],
         )
 
-        root = aiologging.getRootLogger()
-        assert root.getLevel() == logging.DEBUG
-        assert handler in root.handlers
+        root = getLogger()
+        assert root.getEffectiveLevel() == logging.DEBUG
+        assert root.handlers == [handler]
         assert handler.formatter is not None
+
+        # a second call must not stack more handlers (stdlib behaviour)
+        aiologging.basicConfig(handlers=[AsyncStreamHandler()])
+        assert root.handlers == [handler]
+
+    def test_force_replaces_handlers(self) -> None:
+        first = AsyncStreamHandler()
+        second = AsyncStreamHandler()
+        aiologging.basicConfig(handlers=[first])
+        aiologging.basicConfig(handlers=[second], force=True)
+        assert getLogger().handlers == [second]
+
+    def test_default_handler_created(self) -> None:
+        aiologging.basicConfig(level="INFO")
+        root = getLogger()
+        assert len(root.handlers) == 1
+        assert isinstance(root.handlers[0], AsyncStreamHandler)
+        assert root.getEffectiveLevel() == logging.INFO
+
+    def test_queue_parameters_applied(self) -> None:
+        from aiologging.logger import _logger_manager
+
+        aiologging.basicConfig(
+            queue_size=123, overflow="drop_old", delivery="await"
+        )
+        assert _logger_manager.queue_size == 123
+        assert _logger_manager.overflow == "drop_old"
+        assert _logger_manager.delivery == "await"
+        # restore defaults for other tests
+        aiologging.basicConfig(
+            queue_size=10_000, overflow="block", delivery="enqueue"
+        )
 
 
 if __name__ == "__main__":

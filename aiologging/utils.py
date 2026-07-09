@@ -21,12 +21,42 @@ Example:
 
 from __future__ import annotations
 
+import asyncio
 import sys
 import traceback
 from logging import LogRecord
 from typing import Any, Optional, Callable, Awaitable
 
 from .types import AsyncErrorHandler
+
+
+class LazyLock:
+    """
+    ``asyncio.Lock`` that is created on first use.
+
+    On Python 3.9 ``asyncio.Lock()`` binds to the current event loop at
+    construction time, so creating one in a handler constructor fails
+    outside a running loop. Deferring creation to the first
+    ``async with`` keeps handlers constructible anywhere.
+    """
+
+    def __init__(self) -> None:
+        self._lock: Optional[asyncio.Lock] = None
+
+    async def __aenter__(self) -> None:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        await self._lock.acquire()
+
+    async def __aexit__(
+        self, exc_type: Any, exc_val: Any, exc_tb: Any
+    ) -> None:
+        if self._lock is not None:
+            self._lock.release()
+
+    def locked(self) -> bool:
+        """Whether the lock is currently held."""
+        return self._lock is not None and self._lock.locked()
 
 
 def log_error_to_stderr(

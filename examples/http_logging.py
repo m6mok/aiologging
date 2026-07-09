@@ -47,21 +47,22 @@ async def main() -> None:
     await site.start()
 
     try:
-        async with aiologging.getLogger("app.http") as logger:
-            logger.setLevel(aiologging.INFO)
+        logger = aiologging.getLogger("app.http")
+        logger.setLevel(aiologging.INFO)
 
-            handler = aiologging.AsyncHttpJsonHandler(
-                "http://127.0.0.1:8080/logs",
-                authenticator=token_authenticator,
-                # Records are buffered and sent in batches
-                batch_config=BatchConfig(batch_size=5, flush_interval=1.0),
-            )
-            logger.addHandler(handler)
+        handler = aiologging.AsyncHttpJsonHandler(
+            "http://127.0.0.1:8080/logs",
+            authenticator=token_authenticator,
+            # Records are buffered and sent in batches
+            batch_config=BatchConfig(batch_size=5, flush_interval=1.0),
+        )
+        logger.addHandler(handler)
 
-            for i in range(12):
-                await logger.info("HTTP log message %d", i)
+        for i in range(12):
+            await logger.info("HTTP log message %d", i)
 
-            # Closing the logger flushes the remaining buffered records
+        # shutdown() drains the queue and flushes the remaining batch
+        await aiologging.shutdown()
         await asyncio.sleep(0.2)
     finally:
         await runner.cleanup()

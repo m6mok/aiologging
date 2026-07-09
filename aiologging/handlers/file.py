@@ -15,7 +15,7 @@ from typing import Any, Optional, Union, Protocol, runtime_checkable
 
 from ..exceptions import DependencyError, FileError, HandlerError
 from ..types import ErrorHandler, FilterProtocol, FormatterProtocol
-from ..utils import log_error_to_stderr
+from ..utils import LazyLock, log_error_to_stderr
 from .base import AsyncHandler
 
 
@@ -99,7 +99,7 @@ class AsyncFileHandler(AsyncHandler):
         self.errors = errors or "strict"
         self.delay = delay
         self._file: Optional[AsyncFileProtocol] = None  # aiofiles file object
-        self._write_lock = asyncio.Lock()
+        self._write_lock = LazyLock()
 
         # Validate the file path
         self._validate_file_path()
@@ -303,7 +303,7 @@ class AsyncFileHandlerWithRotation(AsyncFileHandler):
             error_handler,
         )
         self.backup_count = backup_count
-        self._rotation_lock = asyncio.Lock()
+        self._rotation_lock = LazyLock()
 
     async def _rotate_file(self) -> None:
         """

@@ -35,6 +35,7 @@ class TestExcInfoNormalization:
             level=logging.DEBUG,
             handlers=[handler],
             propagate=False,
+            delivery="await",
         )
 
         try:
@@ -57,6 +58,7 @@ class TestExcInfoNormalization:
             level=logging.DEBUG,
             handlers=[handler],
             propagate=False,
+            delivery="await",
         )
 
         error = RuntimeError("direct instance")
@@ -76,6 +78,7 @@ class TestSyncStreamDispatch:
             level=logging.DEBUG,
             handlers=[handler],
             propagate=False,
+            delivery="await",
         )
 
         await logger.info("single write")
@@ -107,8 +110,10 @@ class TestClosedParentPropagation:
         parent = AsyncLogger("test.parent", level=logging.DEBUG)
         await parent.close()
 
-        child = AsyncLogger("test.parent.child", level=logging.DEBUG)
-        child.setParent(parent)
+        child = AsyncLogger(
+            "test.parent.child", level=logging.DEBUG, delivery="await"
+        )
+        child.parent = parent
 
         buf = io.StringIO()
         child.addHandler(AsyncStreamHandler(buf))
@@ -151,6 +156,7 @@ class TestRealStreamWriter:
             level=logging.DEBUG,
             handlers=[handler],
             propagate=False,
+            delivery="await",
         )
         await logger.info("over tcp")
 

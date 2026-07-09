@@ -40,9 +40,10 @@ async def main() -> None:
     aiologging.configure_from_dict(CONFIG)
 
     logger = aiologging.get_configured_logger("myapp")
-    async with logger:
-        await logger.info("Configured via dictionary")
-        await logger.debug("This goes to the file handler only")
+    await logger.info("Configured via dictionary")
+    await logger.debug("This goes to the file handler only")
+
+    await aiologging.shutdown()
 
 
 if __name__ == "__main__":

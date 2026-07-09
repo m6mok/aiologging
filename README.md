@@ -2,21 +2,19 @@
 
 [![CI](https://github.com/m6mok/aiologging/actions/workflows/ci.yml/badge.svg)](https://github.com/m6mok/aiologging/actions/workflows/ci.yml)
 
-Asynchronous logging library for Python (3.9+) with full compatibility to the standard logging module but with async methods requiring await.
+Asynchronous logging library for Python (3.9–3.14). The API mirrors the standard `logging` module — same method names, signatures, hierarchy and semantics — with the logging methods being coroutines. Records are created at the call site and put on a queue; a background consumer performs the handler I/O, so `await logger.info(...)` never waits for a file write or an HTTP request.
 
 ## Features
 
-- **Full API Compatibility**: Drop-in replacement for standard logging with async methods
-- **Async Handlers**: Non-blocking I/O for streams, files, and HTTP endpoints
-- **File Rotation**: Size and time-based log rotation with async support
-- **HTTP Handlers**: Send logs to HTTP endpoints with extensible authentication
-- **Buffered Handlers**: High-performance batch processing for high-volume logging
-- **Performance Metrics**: Built-in metrics collection for monitoring logging performance
-- **Error Handling**: Comprehensive error handling with custom exception types
-- **Configuration Management**: Flexible configuration from files, dictionaries, or environment variables
-- **Optional Dependencies**: Install only what you need
-- **Strict Type Checking**: Full mypy support with type hints
-- **Context Manager Support**: Safe resource management with `async with`
+- **logging-compatible API**: same methods, levels, hierarchy, filters and `LogRecord` semantics as the standard `logging` module
+- **Background consumer**: handler I/O happens off the calling coroutine's path; the consumer starts lazily and survives event loop changes
+- **Configurable delivery**: `await` resolves on enqueue (default) or after handlers processed the record (`delivery="await"`)
+- **Configurable backpressure**: bounded queue with `block` (default), `drop_new` or `drop_old` overflow policies
+- **Stdlib bridge**: `captureStdlib()` routes third-party library logs (aiohttp, sqlalchemy, ...) through the same async handlers
+- **Async Handlers**: non-blocking I/O for streams, files (with size/time rotation) and HTTP endpoints with extensible authentication
+- **Buffered Handlers**: batch processing for high-volume logging
+- **Performance Metrics**: built-in metrics for loggers, handlers and the queue
+- **Strict Type Checking**: full mypy support with type hints
 
 ## Installation
 
@@ -47,63 +45,77 @@ pip install aiologging[dev]
 
 ## Quick Start
 
-### Basic Usage
-
 ```python
 import asyncio
 import aiologging
 
 async def main():
-    async with aiologging.getLogger("app") as logger:
-        await logger.info("Application started")
-        await logger.warning("Something might be wrong")
-        await logger.error("An error occurred")
+    aiologging.basicConfig(level=aiologging.INFO)
+
+    logger = aiologging.getLogger("app")
+    await logger.info("Application started")
+    await logger.warning("Something might be wrong")
+    await logger.error("An error occurred: %s", "details")
+
+    # once, before the loop goes away: drain the queue, close handlers
+    await aiologging.shutdown()
 
 asyncio.run(main())
 ```
 
-### Basic Configuration
+Module-level convenience functions work like in standard logging:
 
 ```python
-import aiologging
+await aiologging.warning("Logged on the root logger")
+```
 
-# Configure basic logging (similar to logging.basicConfig)
+### How it works
+
+`await logger.info(...)` synchronously creates the `LogRecord` (so caller info, `%`-formatting and `exc_info` behave exactly like standard logging) and puts it on a bounded queue. A background task drains the queue and dispatches records to the async handlers. By default the `await` resolves as soon as the record is enqueued — logging is nearly free for the calling coroutine.
+
+Lifecycle:
+
+- the consumer starts lazily on the first logged record and is rebuilt transparently if the event loop changes (e.g. one loop per test);
+- `await aiologging.flush()` waits until everything queued has been handled;
+- `await aiologging.shutdown()` drains the queue and closes all handlers — call it once at application exit.
+
+### Delivery and backpressure
+
+```python
 aiologging.basicConfig(
     level=aiologging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    queue_size=10_000,     # queue capacity
+    overflow="block",      # "block" | "drop_new" | "drop_old"
+    delivery="enqueue",    # "enqueue" | "await"
 )
 
-async def main():
-    async with aiologging.getLogger("app") as logger:
-        await logger.info("This will be logged to stderr")
+# per-logger override for critical logs: the await resolves only
+# after the handlers have processed the record
+audit = aiologging.getLogger("app.audit")
+audit.delivery = "await"
 ```
 
-### Using Convenience Functions
+- `overflow="block"` (default): when the queue is full, `await logger.info(...)` waits for free space — no records are lost.
+- `overflow="drop_new"` / `"drop_old"`: the call never waits; the incoming or the oldest record is discarded and counted in metrics.
+
+### Capturing stdlib logging
+
+Third-party libraries log via the standard `logging` module. Route their records through your async handlers:
 
 ```python
-import asyncio
-import aiologging
-
-async def main():
-    # Create handlers using convenience functions
-    stream_handler = aiologging.create_stream_handler(level=aiologging.INFO)
-    file_handler = aiologging.create_file_handler("app.log", level=aiologging.DEBUG)
-
-    # Get logger and add handlers
-    async with aiologging.getLogger("app") as logger:
-        logger.addHandler(stream_handler)
-        logger.addHandler(file_handler)
-
-        await logger.info("This goes to both stderr and app.log")
-
-asyncio.run(main())
+aiologging.basicConfig(level=aiologging.INFO, capture_stdlib=True)
+# or:
+aiologging.captureStdlib()
 ```
+
+Bridged records are routed through the aiologging hierarchy under the same logger name, so per-name handlers and propagation work as usual. The bridge is thread-safe and buffers records emitted before the event loop starts.
 
 ## Examples
 
 Complete runnable examples live in the [examples/](examples/) directory:
 
-- [examples/basic_usage.py](examples/basic_usage.py) — levels, `basicConfig`, `exc_info`, one-off logging
+- [examples/basic_usage.py](examples/basic_usage.py) — levels, `basicConfig`, `exc_info`, delivery modes, `flush`/`shutdown`
+- [examples/stdlib_capture.py](examples/stdlib_capture.py) — routing third-party (stdlib `logging`) records through async handlers, including from threads and before the loop starts
 - [examples/file_logging.py](examples/file_logging.py) — file handler, size- and time-based rotation
 - [examples/http_logging.py](examples/http_logging.py) — JSON batches over HTTP with a custom authenticator (includes a local test collector)
 - [examples/config_usage.py](examples/config_usage.py) — configuring loggers from a dictionary
@@ -113,16 +125,15 @@ Complete runnable examples live in the [examples/](examples/) directory:
 ### Stream Handler
 
 ```python
-import aiologging
 import sys
+import aiologging
 
 async def main():
-    async with aiologging.getLogger("app") as logger:
-        # Add stdout handler
-        stdout_handler = aiologging.AsyncStreamHandler(sys.stdout)
-        logger.addHandler(stdout_handler)
+    logger = aiologging.getLogger("app")
+    logger.addHandler(aiologging.AsyncStreamHandler(sys.stdout))
 
-        await logger.info("This goes to stdout")
+    await logger.info("This goes to stdout")
+    await aiologging.shutdown()
 ```
 
 ### File Handler (requires aiofiles)
@@ -131,12 +142,11 @@ async def main():
 import aiologging
 
 async def main():
-    async with aiologging.getLogger("app") as logger:
-        # Add file handler
-        file_handler = aiologging.AsyncFileHandler("app.log")
-        logger.addHandler(file_handler)
+    logger = aiologging.getLogger("app")
+    logger.addHandler(aiologging.AsyncFileHandler("app.log"))
 
-        await logger.info("This goes to app.log")
+    await logger.info("This goes to app.log")
+    await aiologging.shutdown()
 ```
 
 ### Rotating File Handler (requires aiofiles)
@@ -145,24 +155,24 @@ async def main():
 import aiologging
 
 async def main():
-    async with aiologging.getLogger("app") as logger:
-        # Size-based rotation
-        rotating_handler = aiologging.AsyncRotatingFileHandler(
-            "app.log",
-            max_bytes=1024*1024,  # 1MB
-            backup_count=5
-        )
-        logger.addHandler(rotating_handler)
+    logger = aiologging.getLogger("app")
 
-        # Time-based rotation
-        timed_handler = aiologging.AsyncTimedRotatingFileHandler(
-            "app.log",
-            when="midnight",
-            backup_count=7
-        )
-        logger.addHandler(timed_handler)
+    # Size-based rotation
+    logger.addHandler(aiologging.AsyncRotatingFileHandler(
+        "app.log",
+        max_bytes=1024*1024,  # 1MB
+        backup_count=5,
+    ))
 
-        await logger.info("This will be rotated")
+    # Time-based rotation
+    logger.addHandler(aiologging.AsyncTimedRotatingFileHandler(
+        "timed.log",
+        when="midnight",
+        backup_count=7,
+    ))
+
+    await logger.info("This will be rotated")
+    await aiologging.shutdown()
 ```
 
 ### HTTP Handler (requires aiohttp)
@@ -171,15 +181,14 @@ async def main():
 import aiologging
 
 async def main():
-    async with aiologging.getLogger("app") as logger:
-        # Basic HTTP handler
-        http_handler = aiologging.AsyncHttpHandler(
-            "https://api.example.com/logs",
-            headers={"Authorization": "Bearer token"}
-        )
-        logger.addHandler(http_handler)
+    logger = aiologging.getLogger("app")
+    logger.addHandler(aiologging.AsyncHttpHandler(
+        "https://api.example.com/logs",
+        headers={"Authorization": "Bearer token"},
+    ))
 
-        await logger.info("This will be sent via HTTP")
+    await logger.info("This will be sent via HTTP")
+    await aiologging.shutdown()
 ```
 
 ### Custom Authentication
@@ -189,19 +198,13 @@ import aiologging
 
 async def oauth_authenticator(session, request_data):
     """Custom OAuth authentication."""
-    # Refresh token logic here
     token = await refresh_oauth_token()
     return {"Authorization": f"Bearer {token}"}
 
-async def main():
-    async with aiologging.getLogger("app") as logger:
-        http_handler = aiologging.AsyncHttpHandler(
-            "https://api.example.com/logs",
-            authenticator=oauth_authenticator
-        )
-        logger.addHandler(http_handler)
-
-        await logger.info("This uses custom authentication")
+http_handler = aiologging.AsyncHttpHandler(
+    "https://api.example.com/logs",
+    authenticator=oauth_authenticator,
+)
 ```
 
 ## HTTP Handler Formats
@@ -250,31 +253,23 @@ class CustomFilter:
     def filter(self, record):
         return "important" in record.getMessage()
 
-async def main():
-    async with aiologging.getLogger("app") as logger:
-        logger.addFilter(CustomFilter())
-
-        await logger.info("This is important")  # Will be logged
-        await logger.info("This is not")        # Will be filtered
+logger = aiologging.getLogger("app")
+logger.addFilter(CustomFilter())
 ```
 
 ### Custom Formatters
+
+Formatters live on handlers, exactly like in standard logging:
 
 ```python
 import logging
 import aiologging
 
-async def main():
-    async with aiologging.getLogger("app") as logger:
-        formatter = logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-        )
-
-        handler = aiologging.AsyncStreamHandler()
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-
-        await logger.info("Formatted message")
+handler = aiologging.AsyncStreamHandler()
+handler.setFormatter(logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+))
+aiologging.getLogger("app").addHandler(handler)
 ```
 
 ### Error Handling
@@ -286,35 +281,21 @@ async def error_handler(record, exception):
     """Custom error handler for failed log operations."""
     print(f"Failed to log {record.getMessage()}: {exception}")
 
-async def main():
-    async with aiologging.getLogger("app") as logger:
-        handler = aiologging.AsyncStreamHandler()
-        handler.error_handler = error_handler
-        logger.addHandler(handler)
-
-        await logger.info("This has custom error handling")
+handler = aiologging.AsyncStreamHandler()
+handler.error_handler = error_handler
 ```
 
 ### Performance Metrics
 
 ```python
-import asyncio
-import aiologging
+from aiologging.logger import _logger_manager
 
-async def main():
-    # Create logger with metrics enabled
-    async with aiologging.getLogger("app") as logger:
-        # Get metrics for the logger
-        metrics = logger.get_metrics()
-        print(f"Logger metrics: {metrics}")
+logger = aiologging.getLogger("app")
+print(logger.get_metrics())            # per-logger counters
+print(_logger_manager.get_metrics())   # queue length, dropped records
 
-        # Get metrics for handlers
-        for handler in logger.handlers:
-            if hasattr(handler, 'get_metrics'):
-                handler_metrics = handler.get_metrics()
-                print(f"Handler metrics: {handler_metrics}")
-
-asyncio.run(main())
+for handler in logger.handlers:
+    print(handler.get_metrics())       # per-handler counters
 ```
 
 ### Batch Processing
@@ -323,24 +304,14 @@ asyncio.run(main())
 import aiologging
 from aiologging.types import BatchConfig
 
-async def main():
-    async with aiologging.getLogger("app") as logger:
-        # Configure batch processing for HTTP handler
-        batch_config = BatchConfig(
-            batch_size=100,
-            flush_interval=5.0,
-            max_retries=3
-        )
-
-        http_handler = aiologging.AsyncHttpHandler(
-            "https://api.example.com/logs",
-            batch_config=batch_config
-        )
-        logger.addHandler(http_handler)
-
-        # Log many messages - they'll be sent in batches
-        for i in range(150):
-            await logger.info(f"Message {i}")
+http_handler = aiologging.AsyncHttpHandler(
+    "https://api.example.com/logs",
+    batch_config=BatchConfig(
+        batch_size=100,
+        flush_interval=5.0,
+        max_retries=3,
+    ),
+)
 ```
 
 ## Configuration Management
@@ -374,12 +345,12 @@ config = {
     }
 }
 
-# Configure from dictionary
 aiologging.configure_from_dict(config)
 
 async def main():
     logger = aiologging.get_configured_logger("myapp")
     await logger.info("This uses configured logger")
+    await aiologging.shutdown()
 
 asyncio.run(main())
 ```
@@ -387,62 +358,65 @@ asyncio.run(main())
 ### Configuration from File
 
 ```python
-import asyncio
-import aiologging
-
-# Configure from JSON file
 aiologging.configure_from_file("logging_config.json")
-
-async def main():
-    logger = aiologging.get_configured_logger("myapp")
-    await logger.info("This uses logger configured from file")
-
-asyncio.run(main())
 ```
 
 ## Migration from Standard Logging
 
-### Standard Logging
-
 ```python
+# before
 import logging
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 logger.info("Message")
-```
 
-### With aiologging
-
-```python
+# after
 import aiologging
 
-async def main():
-    async with aiologging.getLogger("app") as logger:
-        await logger.info("Message")
+aiologging.basicConfig(level=aiologging.INFO)
+logger = aiologging.getLogger("app")
+await logger.info("Message")            # + await
+
+await aiologging.shutdown()             # once, at application exit
 ```
 
-### Key Differences
+Key differences:
 
-1. **Async Context**: Use `async with` for proper resource management
-2. **Await Methods**: All logging methods require `await`
-3. **Async Handlers**: All handlers are non-blocking
-4. **Type Safety**: Full type hints and mypy compliance
-5. **Error Handling**: Enhanced error handling with custom exception types
-6. **Performance Metrics**: Built-in metrics collection for monitoring
+1. **Await the logging methods** — `debug`/`info`/.../`critical`, `log` and `exception` are coroutines; everything else (`setLevel`, `addHandler`, `getChild`, ...) stays synchronous.
+2. **Call `await aiologging.shutdown()` at exit** — the queue must be drained while the event loop is still running.
+3. **Handlers are async** — use the `Async*` handler classes (or bridge stdlib records with `captureStdlib()`).
 
 ## API Reference
 
 ### Logger Methods
 
-All standard logging methods are available as async:
+Async (require `await`):
 
 - `await logger.log(level, msg, *args, **kwargs)`
-- `await logger.debug(msg, *args, **kwargs)`
-- `await logger.info(msg, *args, **kwargs)`
-- `await logger.warning(msg, *args, **kwargs)`
-- `await logger.error(msg, *args, **kwargs)`
-- `await logger.critical(msg, *args, **kwargs)`
-- `await logger.exception(msg, *args, **kwargs)`
+- `await logger.debug/info/warning/error/critical(msg, *args, **kwargs)`
+- `await logger.exception(msg, *args, exc_info=True, **kwargs)`
+
+All accept the standard keyword arguments: `exc_info`, `extra`, `stack_info`, `stacklevel`.
+
+Sync (identical to `logging.Logger`):
+
+- `setLevel(level)`, `getEffectiveLevel()`, `isEnabledFor(level)`
+- `addHandler(h)` / `removeHandler(h)` / `hasHandlers()`
+- `addFilter(f)` / `removeFilter(f)` / `filter(record)`
+- `getChild(suffix)` / `getChildren()`
+- `makeRecord(...)`, `findCaller(stack_info, stacklevel)`
+- attributes: `name`, `level`, `parent`, `propagate`, `handlers`, `filters`, `disabled`
+
+### Module Functions
+
+- `getLogger(name=None)` — hierarchical loggers; no name returns the root logger
+- `basicConfig(level, format, datefmt, handlers, force, queue_size, overflow, delivery, capture_stdlib)`
+- `await flush()` — wait until every queued record has been handled
+- `await shutdown()` — drain the queue and close all handlers
+- `disable(level)` — like `logging.disable`
+- `captureStdlib(capture=True, level=NOTSET)` — bridge stdlib logging records
+- `await debug/info/warning/error/exception/critical/log(...)` — root-logger convenience coroutines
 
 ### Handler Classes
 
@@ -455,6 +429,7 @@ All standard logging methods are available as async:
 - `AsyncHttpTextHandler` - Plain text HTTP handler (requires aiohttp)
 - `AsyncHttpJsonHandler` - JSON HTTP handler (requires aiohttp)
 - `AsyncHttpProtoHandler` - Protobuf HTTP handler (requires aiohttp, protobuf)
+- `StdlibBridgeHandler` - Sync `logging.Handler` forwarding records into aiologging
 
 ### Configuration Classes
 
@@ -481,13 +456,12 @@ All standard logging methods are available as async:
 
 ## Performance Considerations
 
-1. **Buffering**: Use buffered handlers for high-volume logging
-2. **Batch Processing**: Configure appropriate batch sizes for HTTP handlers
-3. **Async I/O**: All I/O operations are non-blocking
-4. **Resource Management**: Always use context managers for proper cleanup
-5. **Metrics Collection**: Enable metrics to monitor performance
-6. **Rate Limiting**: Use rate limiters to prevent log flooding
-7. **Adaptive Buffering**: Enable adaptive buffering for optimal performance
+1. **Delivery mode**: the default `enqueue` makes logging nearly free for the caller; reserve `delivery="await"` for records that must be confirmed
+2. **Backpressure**: pick the overflow policy consciously — `block` never loses records, `drop_*` never stalls the application
+3. **Buffering**: use buffered/batching handlers for high-volume logging
+4. **Metrics Collection**: enable metrics to monitor drops and errors
+5. **Rate Limiting**: use rate limiters to prevent log flooding
+6. **Shutdown**: always `await aiologging.shutdown()` before exit so nothing queued is lost
 
 ## Testing
 
@@ -518,6 +492,20 @@ mypy aiologging
 MIT License - see LICENSE file for details.
 
 ## Changelog
+
+### 0.2.0
+
+**Breaking**: the logging pipeline is now queue-based and the API strictly follows the standard `logging` module.
+
+- Records are enqueued at the call site and dispatched by a background consumer — `await logger.info(...)` no longer waits for handler I/O
+- Configurable `delivery` ("enqueue"/"await") and `overflow` ("block"/"drop_new"/"drop_old") via `basicConfig` or per logger
+- `await aiologging.flush()` / `await aiologging.shutdown()` lifecycle; the consumer starts lazily and survives event loop changes
+- Stdlib bridge: `captureStdlib()` / `basicConfig(capture_stdlib=True)` routes standard `logging` records through async handlers
+- Module-level convenience coroutines (`aiologging.info(...)`, ...) and `aiologging.disable(level)`
+- API aligned with `logging.Logger`: `getEffectiveLevel`, `getChild`, `getChildren`, `hasHandlers`, `makeRecord`, `findCaller`, `stacklevel` support, `parent`/`propagate`/`filters` attributes; `getLogger()` without arguments returns the root logger
+- Removed: `Logger.setFormatter`/`getFormatter` (formatters live on handlers), `getLevel` (use `getEffectiveLevel`), `disable()`/`enable()` methods (use the `disabled` attribute or `aiologging.disable`), `setParent`/`getParent`, `getRootLogger`, `getLoggerContext`, `log_async`
+- `async with logger:` now flushes instead of closing the shared logger instance
+- Handlers can be constructed outside a running event loop on Python 3.9
 
 ### 0.1.1
 

@@ -24,6 +24,7 @@ from ..types import (
     HttpContentType,
     ParamsType,
 )
+from ..utils import LazyLock
 from .base import BufferedAsyncHandler
 
 # Try to import aiohttp
@@ -133,7 +134,7 @@ class AsyncHttpHandlerBase(BufferedAsyncHandler):
         self.authenticator = authenticator or self._default_authenticator
         self.batch_config = batch_config or BatchConfig()
         self._session: Optional[ClientSession] = None
-        self._session_lock = asyncio.Lock()
+        self._session_lock = LazyLock()
 
     async def _get_session(self) -> ClientSession:
         """Get or create an aiohttp session."""
