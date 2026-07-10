@@ -29,6 +29,16 @@ ci: update actions, run examples; fix Makefile and .gitignore
 A version-bump commit contains the code, tests, example, README
 updates **and** both version strings — one commit per release.
 
+## Release format
+
+Uniform for every release (enforced by `make release`):
+
+- **tag**: `vX.Y.Z`
+- **GitHub Release title**: `vX.Y.Z` (same as the tag)
+- **release notes**: the `### X.Y.Z` section of the README changelog,
+  verbatim — the changelog is the single source of truth, write it
+  once per release and nowhere else.
+
 ## Pipeline
 
 - **CI** (`.github/workflows/ci.yml`) runs on every push/PR to
@@ -41,8 +51,13 @@ updates **and** both version strings — one commit per release.
 
 ## Release steps (when asked)
 
-1. Bump both version strings; run the full local gate
+1. Bump both version strings, add the `### X.Y.Z` changelog section
+   to README; run the full local gate
    (`make quick-test quick-mypy`, flake8, run the touched examples).
-2. Commit as `type: summary (X.Y.Z)`; the maintainer pushes.
-3. The maintainer creates the GitHub Release; publishing it triggers
-   the PyPI upload.
+2. Commit as `type: summary (X.Y.Z)`.
+3. Run `make release` (`scripts/release.sh`). It verifies the
+   preconditions (clean tree, `master`, versions in sync, changelog
+   section present, tag/release not taken), re-runs the quick gate
+   plus `stress-quick`, pushes, waits for CI to go green, then
+   creates and publishes the GitHub Release in the uniform format —
+   which triggers the PyPI upload.

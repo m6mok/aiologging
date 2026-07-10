@@ -1,4 +1,4 @@
-.PHONY: all setup-envs test-all mypy-all quick-test quick-mypy stress stress-quick check-versions clean help
+.PHONY: all setup-envs test-all mypy-all quick-test quick-mypy stress stress-quick release check-versions clean help
 
 # Версии Python для тестирования через uv
 PYTHON_VERSIONS = 3.9 3.10 3.11 3.12 3.13 3.14
@@ -67,6 +67,13 @@ stress:
 stress-quick:
 	VIRTUAL_ENV=.venv-$(QUICK_VERSION) uv run --active --python $(QUICK_VERSION) python -m stress run --quick
 
+# Релиз: предпроверки, локальный гейт, push, зелёный CI, GitHub
+# Release в едином формате (тэг и заголовок vX.Y.Z, заметки из
+# changelog в README). Публикация релиза триггерит загрузку на PyPI.
+# Подробности: docs/releases.md
+release:
+	@bash scripts/release.sh
+
 # Проверка установленных версий Python через uv
 check-versions:
 	@echo "=== Проверка установленных версий Python ==="
@@ -100,6 +107,7 @@ help:
 	@echo "  make quick-mypy       - Быстрая проверка mypy на Python $(QUICK_VERSION)"
 	@echo "  make stress           - Полный стресс-прогон (минуты, JSON в logs/)"
 	@echo "  make stress-quick     - Быстрый стресс-прогон (~10 секунд)"
+	@echo "  make release          - Релиз текущей версии (гейт, push, CI, GitHub Release)"
 	@echo "  make setup-envs       - Настроить окружения для всех версий Python"
 	@echo "  make check-versions   - Проверить установленные версии Python"
 	@echo "  make clean            - Очистить кэши и временные файлы"
