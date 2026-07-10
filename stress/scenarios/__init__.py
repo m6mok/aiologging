@@ -6,5 +6,6 @@ from . import (  # noqa: F401
     fuzz,
     overload,
     soak,
+    surface,
     throughput,
 )

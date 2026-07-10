@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional, Union, Type, cast
 
@@ -65,6 +66,10 @@ class ConfigManager:
         }
         self._config: Dict[str, Any] = {}
         self._loggers: Dict[str, AsyncLogger] = {}
+        # get_logger is check-then-create: without a lock, racing
+        # threads would each build the logger (and its handlers —
+        # duplicating every line they write)
+        self._get_logger_lock = threading.Lock()
 
     def register_handler(
         self, name: str, handler_class: Type[AsyncHandler]
@@ -226,6 +231,10 @@ class ConfigManager:
         Example:
             >>> logger = config_manager.get_logger("myapp")
         """
+        with self._get_logger_lock:
+            return self._get_logger_locked(name)
+
+    def _get_logger_locked(self, name: str) -> AsyncLogger:
         if name in self._loggers:
             return self._loggers[name]
 

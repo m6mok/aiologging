@@ -572,6 +572,29 @@ MIT License - see LICENSE file for details.
 
 ## Changelog
 
+### 0.2.10
+
+Two correctness fixes found by extending the stress harness (fuzz
+seed sweep and the new `surface` scenario category):
+
+- The stdlib bridge under `overflow="block"` degraded to `drop_old`
+  on a full queue, so bridge traffic could evict records already
+  accepted from async producers — and resolve their
+  `delivery="await"` futures without delivery. The bridge now
+  degrades to `drop_new`: the arriving bridged record is shed (with
+  accounting) and queued records are never touched; the cold-start
+  buffer picks its victim by the configured policy the same way
+- `ConfigManager.get_logger` had a check-then-create race: threads
+  requesting the same logger concurrently could each construct it,
+  attaching duplicate handlers that would double-write every record;
+  construction is now serialized with a lock
+- New stress category `surface` (6 scenarios): content integrity
+  (delivered text and `exc_info` tracebacks byte-checked), stream
+  handlers sharing one buffer, retry exhaustion firing
+  `error_handler` exactly once per record, secret redaction on the
+  error path, and — in a child interpreter — the ConfigManager
+  pipeline and the global `captureStdlib()` install path
+
 ### 0.2.9
 
 Three delivery-guarantee fixes, all found by the new stress harness

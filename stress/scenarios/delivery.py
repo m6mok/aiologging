@@ -912,6 +912,92 @@ async def drop_policy_bridge_threads(ctx: Context) -> None:
     )
 
 
+@scenario("delivery.block_bridge_flood")
+async def block_bridge_flood(ctx: Context) -> None:
+    """block + bridge flood: async records survive, bridge sheds."""
+    # Regression for the fuzz seed-808 finding: a sync producer
+    # cannot await, so "block" degrades to drop_new for bridged
+    # records — the arriving bridged record is shed with accounting,
+    # and records accepted from async producers are never evicted
+    # (nor their delivery-"await" futures resolved without delivery).
+    manager = ctx.new_manager(
+        queue_size=100, overflow="block", delivery="await"
+    )
+    sink = CollectorHandler(delay=0.0005, fail_every=9, track=True)
+    logger = ctx.new_logger(manager)
+    logger.addHandler(sink)
+
+    await logger.info("warmup", extra={"seq": 0, "producer": 999})
+
+    producers = 3
+    threads = 2
+    count_each = ctx.n(600, 150)
+
+    async def one_producer(worker: int) -> None:
+        for seq in range(count_each):
+            await logger.info(
+                "bb %d", seq, extra={"seq": seq, "producer": worker}
+            )
+
+    def thread_producer(worker: int) -> None:
+        for seq in range(count_each):
+            manager.enqueue_from_thread(
+                make_stdlib_record(
+                    "stress", seq=seq, producer=worker
+                )
+            )
+
+    await asyncio.gather(
+        *(one_producer(worker) for worker in range(producers)),
+        *(
+            asyncio.to_thread(thread_producer, 100 + i)
+            for i in range(threads)
+        ),
+    )
+    await manager.flush()
+
+    sent = (producers + threads) * count_each + 1
+    dropped = int(manager.get_metrics()["records_dropped"])
+    unique = sink.unique_pairs()
+    async_delivered = sum(
+        1 for producer, _ in unique if producer < 100 or producer == 999
+    )
+    async_sent = producers * count_each + 1
+    ctx.metrics.update(
+        {
+            "records_sent": sent,
+            "records_delivered": sink.received,
+            "records_dropped": dropped,
+            "async_sent": async_sent,
+            "async_delivered": async_delivered,
+        }
+    )
+    ctx.check(
+        "every async record survived the bridge flood",
+        async_delivered == async_sent,
+        f"delivered={async_delivered} sent={async_sent}",
+    )
+    ctx.check(
+        "the bridge actually hit the full queue", dropped > 0
+    )
+    ctx.check(
+        "only bridged records were shed",
+        dropped <= threads * count_each,
+        f"dropped={dropped} bridge_sent={threads * count_each}",
+    )
+    ctx.check(
+        "accounting balances (sent == delivered + dropped)",
+        sent == sink.received + dropped,
+        f"sent={sent} delivered={sink.received} dropped={dropped}",
+    )
+    ctx.check(
+        "no duplicates", len(sink.pairs()) == len(unique)
+    )
+    ctx.check(
+        "delivered records stay ordered", sink.ordered_per_producer()
+    )
+
+
 # ----------------------------------------------------------------------
 # Delivery mode "await" under faults: the contract is that the
 # coroutine resolves only after every handler has processed (or

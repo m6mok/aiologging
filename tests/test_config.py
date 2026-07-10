@@ -303,6 +303,42 @@ class TestConfigManager:
 
         assert logger1 is logger2
 
+    def test_get_logger_concurrent_construction(self) -> None:
+        """Racing threads must converge on a single logger instance."""
+        import threading
+
+        manager = ConfigManager()
+        manager.load_from_dict(
+            {
+                "version": 1,
+                "loggers": {
+                    "test": {"level": "INFO", "handlers": ["console"]}
+                },
+                "handlers": {
+                    "console": {"class": "stream", "stream": "stdout"}
+                },
+            }
+        )
+
+        racers = 8
+        barrier = threading.Barrier(racers)
+        seen = []
+
+        def race() -> None:
+            barrier.wait()
+            seen.append(manager.get_logger("test"))
+
+        threads = [
+            threading.Thread(target=race) for _ in range(racers)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert len({id(logger) for logger in seen}) == 1
+        assert len(seen[0].handlers) == 1
+
     def test_parse_level_string(self) -> None:
         """Test parsing a log level from a string."""
         manager = ConfigManager()

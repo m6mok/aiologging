@@ -103,7 +103,10 @@ dropped, lost or duplicated.
   thread swarms — always exactly-once overall); `LevelAwareDrop`
   shedding only low-severity records under overload (over both
   `drop_old` and `drop_new`, from async producers and from bridge
-  threads); the atexit drain, exercised in a subprocess (a process
+  threads); a bridge flood against a full `block` queue (the sync
+  path degrades to `drop_new`: async producers' records are never
+  evicted, only arriving bridged records are shed, with accounting);
+  the atexit drain, exercised in a subprocess (a process
   exiting without `shutdown()` must lose nothing; with
   `set_atexit_flush(0)` it must warn with the exact backlog); and
   delivery mode `"await"` under faults (resolution implies delivery,
@@ -114,6 +117,17 @@ dropped, lost or duplicated.
   for each combination. A failing check names the round's full
   parameter set and the seed (`STRESS_SEED` reproduces it). This is
   the scenario that catches bugs at the seams between features.
+- **surface** — feature subsystems the other categories never touch:
+  content integrity (delivered text equals sent text, `exc_info`
+  tracebacks intact — the other categories only count records),
+  stream handlers sharing one buffer under concurrency, the terminal
+  retry-exhaustion path (`error_handler` exactly once per record,
+  pipeline survives), secret redaction on the error path, and — in a
+  child interpreter, because they mutate global state by design —
+  the ConfigManager pipeline (including a concurrent
+  `get_logger` construction race) and the `captureStdlib()` global
+  install path (cold records, loop churn, reinstall idempotency,
+  clean removal).
 
 ## Adding a scenario
 

@@ -1278,7 +1278,9 @@ class AsyncLoggerManager:
         same name. Records emitted from inside the consumer (handler
         I/O libraries logging via stdlib) are dropped to prevent
         feedback loops. Since a sync producer cannot await, the "block"
-        policy degrades to "drop_old" here.
+        policy degrades to "drop_new" here: when the queue is full the
+        arriving bridged record is dropped (with accounting) — records
+        already accepted from async producers are never evicted.
         """
         if _IN_CONSUMER.get():
             self._drop(None)
@@ -1309,8 +1311,17 @@ class AsyncLoggerManager:
             self._put_nowait_sync(logger, record)
         else:
             # No loop anywhere yet — buffer until the consumer starts,
-            # holding at most queue_size cold records (the oldest are
-            # dropped with accounting, mirroring drop_old)
+            # holding at most queue_size cold records. The victim
+            # follows the overflow policy: drop_old evicts the oldest
+            # buffered record; drop_new and "block" (which cannot
+            # block a sync producer, and must not evict records the
+            # rescue path parked here) shed the arriving one.
+            if (
+                len(self._pending) >= self.queue_size > 0
+                and self.overflow != "drop_old"
+            ):
+                self._drop(logger)
+                return
             while len(self._pending) >= self.queue_size > 0:
                 try:
                     old_logger, _ = self._pending.popleft()
@@ -1338,10 +1349,15 @@ class AsyncLoggerManager:
         try:
             queue.put_nowait(item)
         except asyncio.QueueFull:
-            if self.overflow == "drop_new":
-                self._drop(logger)
-            else:
+            if self.overflow == "drop_old":
                 self._put_drop_old(queue, item)
+            else:
+                # drop_new, and also "block": a sync producer cannot
+                # await, and evicting queued records would destroy
+                # records accepted under the block guarantee (and
+                # resolve their delivery-"await" futures without
+                # delivery) — so the arriving record is the one shed
+                self._drop(logger)
 
     def _ensure_consumer(self) -> None:
         """

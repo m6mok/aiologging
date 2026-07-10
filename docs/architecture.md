@@ -120,8 +120,11 @@ into the aiologging queue via `manager.enqueue_from_thread`, which is
 thread-safe: records from a foreign thread hop into the consumer loop
 with `call_soon_threadsafe`; records emitted before any loop exists
 are buffered in `_pending` until the consumer starts. Because a sync
-producer cannot await, the `"block"` policy degrades to `"drop_old"`
-for bridged records.
+producer cannot await, the `"block"` policy degrades to `"drop_new"`
+for bridged records: on a full queue the arriving bridged record is
+dropped (with accounting) — records already accepted from async
+producers are never evicted, so `block` keeps losing nothing for
+async callers.
 
 With `captureStdlib(inline_level=logging.ERROR)` the bridge also
 delivers critical records **inline**: before queueing, the record is

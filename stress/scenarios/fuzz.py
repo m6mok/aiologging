@@ -190,8 +190,27 @@ def chaos_mix(ctx: Context) -> None:
                 )
             if duplicates != 0:
                 dup_bad.append(f"{detail} duplicates={duplicates}")
-            if overflow == "block" and policy is None and dropped != 0:
-                loss_bad.append(f"{detail} dropped={dropped}")
+            if overflow == "block" and policy is None:
+                # block loses nothing for async producers; bridge
+                # threads degrade to drop_new (a sync producer cannot
+                # await), so only arriving bridged records may be
+                # shed — and never more than the bridge sent
+                unique_async = sum(
+                    1
+                    for producer, _ in sink.unique_pairs()
+                    if producer < 100 or producer == 999
+                )
+                async_sent = producers * count_each + 1  # + warmup
+                if unique_async != async_sent:
+                    loss_bad.append(
+                        f"{detail} async_delivered={unique_async} "
+                        f"async_sent={async_sent}"
+                    )
+                if dropped > threads * count_each:
+                    loss_bad.append(
+                        f"{detail} dropped={dropped} "
+                        f"bridge_sent={threads * count_each}"
+                    )
             if not sink.ordered_per_producer():
                 order_bad.append(detail)
 

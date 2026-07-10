@@ -26,6 +26,8 @@ class CollectorHandler(AsyncHandler):
             the base-class retry loop then redelivers the record
         track: Record ``(producer, seq)`` pairs from the ``extra``
             payload for ordering / loss analysis
+        store: Keep every delivered ``formatted_message`` for
+            content-integrity analysis
     """
 
     def __init__(
@@ -33,6 +35,7 @@ class CollectorHandler(AsyncHandler):
         delay: float = 0.0,
         fail_every: int = 0,
         track: bool = False,
+        store: bool = False,
         **kwargs: Any,
     ) -> None:
         kwargs.setdefault("retry_delay", 0.001)
@@ -40,10 +43,12 @@ class CollectorHandler(AsyncHandler):
         self.delay = delay
         self.fail_every = fail_every
         self.track = track
+        self.store = store
         self.received = 0
         self.attempts = 0
         self.injected_failures = 0
         self.by_producer: Dict[int, List[int]] = {}
+        self.stored: List[str] = []
 
     async def _emit(self, record: LogRecord, formatted_message: str) -> None:
         self.attempts += 1
@@ -53,6 +58,8 @@ class CollectorHandler(AsyncHandler):
             self.injected_failures += 1
             raise RuntimeError("injected sink failure")
         self.received += 1
+        if self.store:
+            self.stored.append(formatted_message)
         if self.track:
             seq = record.__dict__.get("seq")
             if seq is not None:

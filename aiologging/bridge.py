@@ -77,7 +77,9 @@ class StdlibBridgeHandler(logging.Handler):
     loop are handed over via ``loop.call_soon_threadsafe``, and records
     emitted before any event loop exists are buffered until the
     consumer starts. Since ``emit`` cannot await, the "block" overflow
-    policy degrades to "drop_old" for bridged records.
+    policy degrades to "drop_new" for bridged records: on a full
+    queue the arriving bridged record is dropped (with accounting),
+    never a queued one.
 
     With ``inline_level`` set, records at or above it are also offered
     — before queueing — to handlers that support synchronous delivery
