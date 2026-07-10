@@ -474,7 +474,10 @@ class AsyncTimedRotatingFileHandler(AsyncFileHandlerWithRotation):
             # Try to parse the timestamp based on the rotation interval
             if self.when == "S":
                 # Format: YYYY-MM-DD_HH-MM-SS
-                return tuple(map(lambda x: int(x), suffix.split('_')))
+                parts = suffix.split('_')
+                date_parts = tuple(map(lambda x: int(x), parts[0].split('-')))
+                time_parts = tuple(map(lambda x: int(x), parts[1].split('-')))
+                return date_parts + time_parts
             elif self.when == "M":
                 # Format: YYYY-MM-DD_HH-MM
                 parts = suffix.split('_')

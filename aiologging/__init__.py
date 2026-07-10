@@ -69,6 +69,7 @@ from .logger import (
     warning,
 )
 from .bridge import StdlibBridgeHandler, captureStdlib
+from .formatters import TelegramHtmlFormatter, escape_html
 from .config import (
     ConfigManager,
     get_config_manager,
@@ -109,7 +110,6 @@ from .handlers import (
     AsyncHttpHandlerBase,
     AsyncHttpTextHandler,
     AsyncHttpJsonHandler,
-    AsyncHttpProtoHandler,
     AsyncHttpHandler,
     AsyncTelegramHandler,
 )
@@ -125,7 +125,7 @@ DEBUG = logging.DEBUG
 NOTSET = logging.NOTSET
 
 # Version information
-__version__ = "0.2.10"
+__version__ = "0.2.11"
 __author__ = "Evgenii Dementev (m6mok)"
 __license__ = "MIT"
 
@@ -154,6 +154,9 @@ __all__ = [
     # Stdlib bridge
     "StdlibBridgeHandler",
     "captureStdlib",
+    # Formatters
+    "TelegramHtmlFormatter",
+    "escape_html",
     # Delivery/overflow types
     "DeliveryMode",
     "OverflowPolicy",
@@ -176,7 +179,6 @@ __all__ = [
     "AsyncHttpHandlerBase",
     "AsyncHttpTextHandler",
     "AsyncHttpJsonHandler",
-    "AsyncHttpProtoHandler",
     "AsyncHttpHandler",
     "AsyncTelegramHandler",
     # Configuration management

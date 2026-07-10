@@ -287,82 +287,6 @@ class TestAsyncHttpTextHandler:
         assert handler._get_content_type() == "text/plain"
 
 
-class TestAsyncHttpProtoHandler:
-    """Test cases for AsyncHttpProtoHandler."""
-
-    def _create_test_record(self, message: str = "Test message", level: int = logging.INFO) -> logging.LogRecord:
-        """Create a test log record."""
-        return logging.LogRecord(
-            name="test", level=level, pathname="", lineno=0,
-            msg=message, args=(), exc_info=None
-        )
-
-    def _create_test_records(self, *messages: str) -> List[logging.LogRecord]:
-        """Create test log records with the given messages."""
-        records = []
-        for msg in messages:
-            record = logging.LogRecord(
-                name="test", level=logging.INFO, pathname="", lineno=0,
-                msg=msg, args=(), exc_info=None
-            )
-            records.append(record)
-        return records
-
-    @pytest.mark.asyncio
-    async def test_emit_proto_format(self) -> None:
-        """Test emit with protobuf format."""
-        from aiologging.handlers.http import AsyncHttpProtoHandler
-
-        with patch("aiologging.handlers.http.PROTOBUF_AVAILABLE", True):
-            handler = AsyncHttpProtoHandler("https://example.com/api/logs")
-            handler.flush = AsyncMock()
-            record = self._create_test_record()
-
-            await handler.emit(record)
-            await handler.flush()
-
-            handler.flush.assert_called()
-
-    @pytest.mark.asyncio
-    async def test_emit_proto_format_without_protobuf(self) -> None:
-        """Test emit with protobuf format when protobuf is not available."""
-        from aiologging.handlers.http import AsyncHttpProtoHandler
-
-        with patch("aiologging.handlers.http.PROTOBUF_AVAILABLE", False):
-            with pytest.raises(DependencyError, match="protobuf is required"):
-                AsyncHttpProtoHandler("https://example.com/api/logs")
-
-    @pytest.mark.asyncio
-    async def test_prepare_request_data(self) -> None:
-        """Test _prepare_request_data method."""
-        from aiologging.handlers.http import AsyncHttpProtoHandler
-
-        with patch("aiologging.handlers.http.PROTOBUF_AVAILABLE", True):
-            handler = AsyncHttpProtoHandler("https://example.com/api/logs")
-
-            record1, record2 = self._create_test_records("Test message 1", "Test message 2")
-
-            # Prepare request data
-            request_data = await handler._prepare_request_data([record1, record2])
-
-            # Verify the data is bytes
-            assert isinstance(request_data, bytes)
-
-            # Decode and verify it contains the expected JSON data
-            decoded_data = request_data.decode('utf-8')
-            assert "Test message 1" in decoded_data
-            assert "Test message 2" in decoded_data
-
-    @pytest.mark.asyncio
-    async def test_get_content_type(self) -> None:
-        """Test _get_content_type method."""
-        from aiologging.handlers.http import AsyncHttpProtoHandler
-
-        with patch("aiologging.handlers.http.PROTOBUF_AVAILABLE", True):
-            handler = AsyncHttpProtoHandler("https://example.com/api/logs")
-            assert handler._get_content_type() == "application/x-protobuf"
-
-
 class TestAsyncHttpHandlerAdvanced:
     """Advanced test cases for AsyncHttpHandler."""
 
@@ -498,13 +422,6 @@ class TestAsyncHttpHandlerAdvanced:
             headers={"Content-Type": "application/json"}
         )
         assert handler._detect_format_type() == "application/json"
-
-        # Test with protobuf Content-Type
-        handler = AsyncHttpHandler(
-            "https://example.com/api/logs",
-            headers={"Content-Type": "application/x-protobuf"}
-        )
-        assert handler._detect_format_type() == "application/x-protobuf"
 
         # Test with default (text/plain)
         handler = AsyncHttpHandler("https://example.com/api/logs")

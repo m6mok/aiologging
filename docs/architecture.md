@@ -170,7 +170,6 @@ AsyncHandlerABC (types.py)
             │     batch retries with exponential backoff
             ├── AsyncHttpTextHandler
             ├── AsyncHttpJsonHandler
-            ├── AsyncHttpProtoHandler (requires protobuf)
             ├── AsyncHttpHandler (auto-detects format)
             └── AsyncTelegramHandler (telegram.py)
                   Bot API sendMessage, 4096-char chunking,
@@ -205,7 +204,19 @@ Extension hooks on `AsyncHttpHandlerBase` (added in 0.2.2):
   `"timed_rotating_file"` to classes; a `"class"` outside the
   registry is resolved as a dotted path to an `AsyncHandler`
   subclass (stdlib `dictConfig`-style), with remaining config keys
-  passed to the constructor as keyword arguments.
+  passed to the constructor as keyword arguments. Configured loggers
+  are obtained from the global hierarchy (so `parent`/propagation
+  and global `flush()`/`shutdown()` cover them); a `"formatters"`
+  section defines named formatters referenced by handlers via
+  `"formatter"`; unknown configuration keys raise
+  `ConfigurationError`.
+- `aiologging/formatters.py` — bundled formatters: currently
+  `TelegramHtmlFormatter` (HTML-escapes the message, logger name,
+  `funcName`, traceback and stack info; the template may carry
+  Telegram markup) plus the `escape_html` helper. Pairs with the
+  entity-safe splitter in `handlers/telegram.py`, which never cuts
+  a message inside a tag or character entity and closes/reopens
+  open tags across parts.
 - `aiologging/utils.py` — `LazyLock` (an `asyncio.Lock` created on
   first use, because on Python 3.9 `asyncio.Lock()` binds to the
   current loop at construction), `handle_error_with_fallback`,

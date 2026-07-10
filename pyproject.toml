@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aiologging"
-version = "0.2.10"
+version = "0.2.11"
 description = "Asynchronous logging library mirroring the standard logging API, with queue-based non-blocking handlers"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -43,14 +43,10 @@ aiohttp = [
 httpx = [
     "httpx>=0.24.0",
 ]
-protobuf = [
-    "protobuf>=4.0.0",
-]
 all = [
     "aiofiles>=23.0.0",
     "aiohttp>=3.8.0",
     "httpx>=0.24.0",
-    "protobuf>=4.0.0",
 ]
 dev = [
     "pytest>=7.0.0",
@@ -59,11 +55,9 @@ dev = [
     "mypy>=1.0.0",
     "flake8>=6.0.0",
     "types-aiofiles",
-    "types-protobuf",
     "aiofiles>=23.0.0",
     "aiohttp>=3.8.0",
     "httpx>=0.24.0",
-    "protobuf>=4.0.0",
 ]
 
 [project.urls]

@@ -13,7 +13,6 @@ from .http import (
     AsyncHttpHandlerBase,
     AsyncHttpTextHandler,
     AsyncHttpJsonHandler,
-    AsyncHttpProtoHandler,
     AsyncHttpHandler,
 )
 from .telegram import AsyncTelegramHandler
@@ -28,7 +27,6 @@ __all__ = [
     "AsyncHttpHandlerBase",
     "AsyncHttpTextHandler",
     "AsyncHttpJsonHandler",
-    "AsyncHttpProtoHandler",
     "AsyncHttpHandler",
     "AsyncTelegramHandler",
 ]

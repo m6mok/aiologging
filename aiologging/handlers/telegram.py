@@ -10,11 +10,12 @@ Telegram chat via the Bot API ``sendMessage`` method, respecting the
 from __future__ import annotations
 
 import json
+import re
 import ssl
 import threading
 import urllib.request
 from logging import LogRecord, NOTSET
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ..exceptions import ConfigurationError
 from ..types import (
@@ -33,6 +34,112 @@ TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 
 TELEGRAM_API_BASE_URL = "https://api.telegram.org"
 
+# Tags Telegram accepts in parse_mode="HTML" (aliases included).
+# The entity-safe splitter closes them at a part boundary and
+# reopens them — with their original attributes — in the next part.
+_TELEGRAM_HTML_TAGS = frozenset(
+    (
+        "b", "strong", "i", "em", "u", "ins", "s", "strike", "del",
+        "span", "tg-spoiler", "a", "code", "pre", "blockquote",
+    )
+)
+
+# One markup token: an HTML tag or a character entity. Anything
+# else is plain text and may be split at any character boundary.
+_TOKEN_RE = re.compile(
+    r"</?([a-zA-Z][a-zA-Z0-9-]*)(?:\s[^<>]*)?/?>"
+    r"|&(?:[a-zA-Z][a-zA-Z0-9]*|#[0-9]+|#x[0-9a-fA-F]+);"
+)
+
+
+def _split_html(text: str, limit: int) -> List[str]:
+    """
+    Split Telegram-HTML text into parts of at most ``limit`` chars.
+
+    A boundary never falls inside a tag or a character entity
+    (``&amp;`` and friends); tags open at a boundary are closed at
+    the end of the part and reopened, with their original
+    attributes, at the start of the next — so every part is valid
+    Telegram HTML on its own. Tag-like runs that are not Telegram
+    tags are kept atomic but do not affect the open-tag bookkeeping.
+
+    Args:
+        text: The formatted (already escaped) message text
+        limit: Maximum characters per part
+
+    Returns:
+        The list of self-contained message parts
+    """
+    parts: List[str] = []
+    # (tag name, original opening token) for every currently open tag
+    stack: List[Tuple[str, str]] = []
+    current = ""
+    # Length of the reopened-tags prefix: a part is only emitted
+    # when it grew beyond it (a prefix alone carries no content)
+    base_len = 0
+
+    def reserve(open_tags: List[Tuple[str, str]]) -> int:
+        """Room to keep for the ``</...>`` closers of open tags."""
+        return sum(len(name) + 3 for name, _ in open_tags)
+
+    def flush() -> None:
+        """Close the part and start the next one, reopening tags."""
+        nonlocal current, base_len
+        if len(current) > base_len:
+            parts.append(
+                current
+                + "".join(
+                    f"</{name}>" for name, _ in reversed(stack)
+                )
+            )
+        current = "".join(token for _, token in stack)
+        base_len = len(current)
+
+    pos = 0
+    while pos < len(text):
+        match = _TOKEN_RE.match(text, pos)
+        if match is None:
+            # Plain text up to the next markup token
+            next_match = _TOKEN_RE.search(text, pos)
+            end = next_match.start() if next_match else len(text)
+            run = text[pos:end]
+            while run:
+                room = limit - len(current) - reserve(stack)
+                if room <= 0:
+                    if len(current) > base_len:
+                        flush()
+                        continue
+                    # Degenerate limit (smaller than the tag
+                    # overhead): still make progress
+                    room = 1
+                current += run[:room]
+                run = run[room:]
+            pos = end
+            continue
+
+        token = match.group(0)
+        name = (match.group(1) or "").lower()
+        new_stack = stack
+        if name in _TELEGRAM_HTML_TAGS:
+            if token.startswith("</"):
+                if stack and stack[-1][0] == name:
+                    new_stack = stack[:-1]
+            else:
+                new_stack = stack + [(name, token)]
+        if (
+            len(current) + len(token) + reserve(new_stack) > limit
+            and len(current) > base_len
+        ):
+            flush()
+        # Oversized single token on a fresh part: appended anyway —
+        # like the plain-text hard split, best effort beats a stall
+        current += token
+        stack = new_stack
+        pos = match.end()
+
+    flush()
+    return parts
+
 
 class AsyncTelegramHandler(AsyncHttpHandlerBase):
     """
@@ -45,9 +152,14 @@ class AsyncTelegramHandler(AsyncHttpHandlerBase):
     API returns in ``parameters.retry_after``.
 
     Note:
-        With ``parse_mode`` set (e.g. "HTML" or "MarkdownV2") the
-        formatter is responsible for escaping the message text;
-        splitting an over-long record may also break markup entities.
+        With ``parse_mode="HTML"`` pair the handler with
+        ``TelegramHtmlFormatter`` (or another formatter that escapes
+        the message text); splitting an over-long record is then
+        entity-safe — a split never falls inside a tag or character
+        entity, and open tags are closed/reopened across parts. With
+        "Markdown"/"MarkdownV2" the formatter remains responsible
+        for escaping, and an over-long record is hard-split, which
+        may break markup entities — a documented limitation.
 
     Example:
         >>> handler = AsyncTelegramHandler(
@@ -170,9 +282,19 @@ class AsyncTelegramHandler(AsyncHttpHandlerBase):
         return self.url.replace(f"/bot{self.token}/", "/bot***/")
 
     def _split_text(self, text: str) -> List[str]:
-        """Split a single over-long text into message-sized parts."""
+        """
+        Split a single over-long text into message-sized parts.
+
+        With ``parse_mode="HTML"`` the split is entity-safe: a
+        boundary never falls inside a tag or character entity, and
+        open tags are closed at the end of a part and reopened at
+        the start of the next. Other parse modes are hard-split at
+        the character limit.
+        """
         if len(text) <= self.max_message_length:
             return [text]
+        if self.parse_mode == "HTML":
+            return _split_html(text, self.max_message_length)
         return [
             text[i:i + self.max_message_length]
             for i in range(0, len(text), self.max_message_length)

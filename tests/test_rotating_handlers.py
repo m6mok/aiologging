@@ -943,5 +943,305 @@ def test_timestamp_sorting():
             os.unlink(filename)
 
 
+class _FrozenTime:
+    """time-module stand-in with a fixed time.time()."""
+
+    def __init__(self, now: float) -> None:
+        self._now = now
+        self.gmtime = time.gmtime
+        self.localtime = time.localtime
+        self.strftime = time.strftime
+
+    def time(self) -> float:
+        return self._now
+
+
+def _frozen_utc():
+    """Patch rotating.py's clock to a fixed UTC moment."""
+    import calendar
+
+    # 2026-07-08 10:00:00 UTC is a Wednesday (weekday 2)
+    now = calendar.timegm((2026, 7, 8, 10, 0, 0, 2, 189, 0))
+    return now, patch(
+        "aiologging.handlers.rotating.time", _FrozenTime(now)
+    )
+
+
+class TestTimedRotationSchedule:
+    """Branch coverage for _compute_rollover_time (utc/at_time/W)."""
+
+    def _handler(self, filename: str, **kwargs) -> (
+        AsyncTimedRotatingFileHandler
+    ):
+        return AsyncTimedRotatingFileHandler(
+            filename=filename, interval=1, backup_count=1, **kwargs
+        )
+
+    @pytest.mark.asyncio
+    async def test_midnight_utc(self) -> None:
+        """midnight+utc rolls over at the next 00:00 UTC."""
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            filename = temp_file.name
+        try:
+            now, frozen = _frozen_utc()
+            with frozen:
+                handler = self._handler(
+                    filename, when="midnight", utc=True
+                )
+            # 10:00 UTC -> 14 hours until midnight
+            assert handler._rollover_at == now + 14 * 3600
+            await handler.close()
+        finally:
+            os.unlink(filename)
+
+    @pytest.mark.asyncio
+    async def test_midnight_utc_at_time_later_today(self) -> None:
+        """at_time after 'now' schedules the rollover today."""
+        from datetime import time as dt_time
+
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            filename = temp_file.name
+        try:
+            now, frozen = _frozen_utc()
+            with frozen:
+                handler = self._handler(
+                    filename,
+                    when="midnight",
+                    utc=True,
+                    at_time=dt_time(12, 30, 0),
+                )
+            # 10:00 -> 12:30 the same day
+            assert handler._rollover_at == now + 2 * 3600 + 30 * 60
+            await handler.close()
+        finally:
+            os.unlink(filename)
+
+    @pytest.mark.asyncio
+    async def test_midnight_utc_at_time_already_passed(self) -> None:
+        """at_time before 'now' wraps the rollover to tomorrow."""
+        from datetime import time as dt_time
+
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            filename = temp_file.name
+        try:
+            now, frozen = _frozen_utc()
+            with frozen:
+                handler = self._handler(
+                    filename,
+                    when="midnight",
+                    utc=True,
+                    at_time=dt_time(8, 0, 0),
+                )
+            # 08:00 already passed at 10:00 -> 22 hours to go
+            assert handler._rollover_at == now + 22 * 3600
+            await handler.close()
+        finally:
+            os.unlink(filename)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "when,days",
+        [
+            ("W0", 5),  # Monday from Wednesday
+            ("W1", 6),
+            ("W2", 7),  # same weekday -> next week
+            ("W3", 1),
+            ("W4", 2),
+            ("W5", 3),
+            ("W6", 4),
+        ],
+    )
+    async def test_weekly_utc(self, when: str, days: int) -> None:
+        """W0-W6 roll over on the next matching weekday."""
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            filename = temp_file.name
+        try:
+            now, frozen = _frozen_utc()
+            with frozen:
+                handler = self._handler(filename, when=when, utc=True)
+            assert handler._rollover_at == now + days * 86400
+            await handler.close()
+        finally:
+            os.unlink(filename)
+
+    @pytest.mark.asyncio
+    async def test_weekly_utc_at_time_branches(self) -> None:
+        """Weekly at_time adjusts forward or wraps by a day."""
+        from datetime import time as dt_time
+
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            filename = temp_file.name
+        try:
+            now, frozen = _frozen_utc()
+            with frozen:
+                later = self._handler(
+                    filename,
+                    when="W4",
+                    utc=True,
+                    at_time=dt_time(12, 0, 0),
+                )
+                passed = self._handler(
+                    filename,
+                    when="W4",
+                    utc=True,
+                    at_time=dt_time(8, 0, 0),
+                )
+            # Friday is 2 days away; 12:00 adds 2h, 08:00 wraps 22h
+            assert later._rollover_at == now + 2 * 86400 + 2 * 3600
+            assert passed._rollover_at == (
+                now + 2 * 86400 + 22 * 3600
+            )
+            await later.close()
+            await passed.close()
+        finally:
+            os.unlink(filename)
+
+
+class TestRotationRobustness:
+    """Rotation must degrade gracefully on broken file objects."""
+
+    @pytest.mark.asyncio
+    async def test_size_should_rotate_without_tell(self) -> None:
+        """A file object without tell() never triggers rotation."""
+
+        class _NoTell:
+            pass
+
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            filename = temp_file.name
+        try:
+            handler = AsyncRotatingFileHandler(
+                filename=filename, max_bytes=1, backup_count=1
+            )
+            handler._file = _NoTell()
+            record = logging.LogRecord(
+                "test", logging.INFO, "", 0, "x", (), None
+            )
+            assert not await handler._should_rotate(record)
+            handler._file = None
+            await handler.close()
+        finally:
+            os.unlink(filename)
+
+    @pytest.mark.asyncio
+    async def test_size_should_rotate_tell_raises(self) -> None:
+        """An OSError from tell() suppresses rotation, not logging."""
+
+        class _BrokenTell:
+            async def tell(self) -> int:
+                raise OSError("tell() unavailable")
+
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            filename = temp_file.name
+        try:
+            handler = AsyncRotatingFileHandler(
+                filename=filename, max_bytes=1, backup_count=1
+            )
+            handler._file = _BrokenTell()
+            record = logging.LogRecord(
+                "test", logging.INFO, "", 0, "x", (), None
+            )
+            assert not await handler._should_rotate(record)
+            handler._file = None
+            await handler.close()
+        finally:
+            os.unlink(filename)
+
+    @pytest.mark.asyncio
+    async def test_timed_rotate_without_open_file(self) -> None:
+        """_rotate_file with no open file is a no-op."""
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            filename = temp_file.name
+        try:
+            handler = AsyncTimedRotatingFileHandler(
+                filename=filename, when="H", backup_count=1
+            )
+            assert handler._file is None
+            await handler._rotate_file()  # must not raise
+            await handler.close()
+        finally:
+            os.unlink(filename)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "when,suffix_len",
+        [
+            ("S", len("2026-01-02_03-04-05")),
+            ("M", len("2026-01-02_03-04")),
+            ("H", len("2026-01-02_03")),
+            ("D", len("2026-01-02")),
+        ],
+    )
+    async def test_timed_rotation_suffixes(
+        self, when: str, suffix_len: int
+    ) -> None:
+        """Every interval type produces its own backup suffix."""
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            filename = temp_file.name
+        backups = []
+        try:
+            handler = AsyncTimedRotatingFileHandler(
+                filename=filename, when=when, backup_count=2
+            )
+            with open(filename, "w") as f:
+                f.write("payload")
+            await handler._open_file()
+            await handler._rotate_file()
+            await handler.close()
+
+            base = os.path.basename(filename)
+            backups = [
+                os.path.join(os.path.dirname(filename), name)
+                for name in os.listdir(os.path.dirname(filename))
+                if name.startswith(base) and name != base
+            ]
+            assert len(backups) == 1
+            suffix = os.path.basename(backups[0])[len(base) + 1:]
+            assert len(suffix) == suffix_len
+        finally:
+            for backup in backups:
+                if os.path.exists(backup):
+                    os.unlink(backup)
+            if os.path.exists(filename):
+                os.unlink(filename)
+
+    @pytest.mark.asyncio
+    async def test_timestamp_parsing_by_interval(self) -> None:
+        """Suffix timestamps parse per interval, with mtime fallback."""
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            filename = temp_file.name
+        try:
+            base = Path(filename)
+            for when, suffix, expected in [
+                ("S", "2026-01-02_03-04-05", (2026, 1, 2, 3, 4, 5)),
+                ("M", "2026-01-02_03-04", (2026, 1, 2, 3, 4)),
+                ("H", "2026-01-02_03", (2026, 1, 2, 3)),
+                ("D", "2026-01-02", (2026, 1, 2)),
+            ]:
+                handler = AsyncTimedRotatingFileHandler(
+                    filename=filename, when=when, backup_count=1
+                )
+                path = base.parent / f"{base.name}.{suffix}"
+                assert handler._get_timestamp_from_filename(
+                    path
+                ) == expected
+                await handler.close()
+
+            # An unparseable suffix falls back to the mtime
+            handler = AsyncTimedRotatingFileHandler(
+                filename=filename, when="D", backup_count=1
+            )
+            garbled = base.parent / f"{base.name}.not-a-date"
+            garbled.write_text("x")
+            try:
+                stamp = handler._get_timestamp_from_filename(garbled)
+                assert stamp == (int(garbled.stat().st_mtime),)
+            finally:
+                garbled.unlink()
+            await handler.close()
+        finally:
+            os.unlink(filename)
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

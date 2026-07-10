@@ -4,15 +4,18 @@ Tests for the Telegram handler.
 
 import json
 import logging
+import re
 from typing import Any, Callable, List
 
 import httpx
 import pytest
 
 from aiologging.config import ConfigManager
+from aiologging.formatters import TelegramHtmlFormatter
 from aiologging.handlers.telegram import (
     AsyncTelegramHandler,
     TELEGRAM_MAX_MESSAGE_LENGTH,
+    _split_html,
 )
 from aiologging.exceptions import ConfigurationError, NetworkError
 from aiologging.types import BatchConfig
@@ -168,6 +171,174 @@ class TestTelegramMessageBuilding:
         """The Bot API is spoken to in JSON."""
         handler = AsyncTelegramHandler(TOKEN, CHAT_ID)
         assert handler._get_content_type() == "application/json"
+
+
+_HTML_TOKEN = re.compile(
+    r"<(/?)([a-zA-Z][a-zA-Z0-9-]*)((?:\s[^<>]*)?)>"
+    r"|&(?:[a-zA-Z][a-zA-Z0-9]*|#[0-9]+|#x[0-9a-fA-F]+);"
+)
+
+_KNOWN_TAGS = {"b", "i", "u", "s", "code", "pre", "a"}
+
+
+def _assert_valid_telegram_html(text: str) -> None:
+    """Fail on raw <, >, &, unknown tags or unbalanced tags."""
+    stack: List[str] = []
+    pos = 0
+    while pos < len(text):
+        char = text[pos]
+        if char in "<&":
+            match = _HTML_TOKEN.match(text, pos)
+            assert match is not None, (
+                f"raw {char!r} at {pos}: {text[pos:pos + 20]!r}"
+            )
+            name = match.group(2)
+            if name is not None:
+                name = name.lower()
+                assert name in _KNOWN_TAGS, f"unknown tag {name!r}"
+                if match.group(1):
+                    assert stack and stack[-1] == name, (
+                        f"unbalanced </{name}> in {text!r}"
+                    )
+                    stack.pop()
+                else:
+                    stack.append(name)
+            pos = match.end()
+        else:
+            assert char != ">", f"raw '>' at {pos}: {text!r}"
+            pos += 1
+    assert not stack, f"unclosed tags {stack} in {text!r}"
+
+
+class TestHtmlEntitySafeSplitting:
+    """Test cases for the HTML-aware splitter (parse_mode="HTML")."""
+
+    def test_short_text_unsplit(self) -> None:
+        """Text within the limit is returned as a single message."""
+        handler = AsyncTelegramHandler(
+            TOKEN, CHAT_ID, parse_mode="HTML"
+        )
+        assert handler._split_text("<b>short</b>") == ["<b>short</b>"]
+
+    def test_tag_closed_and_reopened_across_parts(self) -> None:
+        """A tag spanning the boundary is closed and reopened."""
+        parts = _split_html("<b>" + "x" * 30 + "</b>", 20)
+        assert len(parts) > 1
+        for part in parts:
+            assert len(part) <= 20
+            _assert_valid_telegram_html(part)
+        assert parts[0].startswith("<b>") and parts[0].endswith("</b>")
+        assert parts[1].startswith("<b>")
+        # No payload characters were lost in the split
+        payload = "".join(re.sub(r"</?b>", "", part) for part in parts)
+        assert payload == "x" * 30
+
+    def test_boundary_never_inside_entity(self) -> None:
+        """A part boundary cannot cut an &...; entity in half."""
+        text = "ab&amp;" * 20
+        for limit in range(8, 16):
+            for part in _split_html(text, limit):
+                assert len(part) <= limit
+                _assert_valid_telegram_html(part)
+
+    def test_boundary_never_inside_tag(self) -> None:
+        """A part boundary cannot cut a <tag> token in half."""
+        text = "<code>ab</code>" * 10
+        for limit in range(16, 24):
+            for part in _split_html(text, limit):
+                assert len(part) <= limit
+                _assert_valid_telegram_html(part)
+
+    def test_link_reopened_with_attributes(self) -> None:
+        """An <a href=...> is reopened with its attributes intact."""
+        opening = '<a href="https://example.com">'
+        parts = _split_html(opening + "y" * 60 + "</a>", 45)
+        assert len(parts) > 1
+        for part in parts:
+            assert part.startswith(opening)
+            assert part.endswith("</a>")
+
+    def test_nested_tags_reopened_in_order(self) -> None:
+        """Nested open tags close in reverse and reopen in order."""
+        parts = _split_html("<b><i>" + "z" * 40 + "</i></b>", 25)
+        assert len(parts) > 1
+        assert parts[0].endswith("</i></b>")
+        assert parts[1].startswith("<b><i>")
+
+    def test_unknown_tag_like_text_kept_atomic(self) -> None:
+        """A non-Telegram token like <module> is never cut in half."""
+        text = ("word " * 4) + "<module>" + ("word " * 4)
+        for limit in range(9, 20):
+            for part in _split_html(text, limit):
+                assert len(part) <= limit
+                # the pseudo-tag survives whole in exactly one part
+            joined = _split_html(text, limit)
+            assert sum("<module>" in part for part in joined) == 1
+
+    def test_record_split_at_bot_api_limit(self) -> None:
+        """A formatted record with markup splits safely at 4096."""
+        handler = AsyncTelegramHandler(
+            TOKEN, CHAT_ID, parse_mode="HTML",
+            formatter=TelegramHtmlFormatter(),
+        )
+        record = _create_record("long & <detail> " * 400)
+        messages = handler._build_messages([record])
+        assert len(messages) > 1
+        for message in messages:
+            assert len(message) <= TELEGRAM_MAX_MESSAGE_LENGTH
+            _assert_valid_telegram_html(message)
+
+    def test_batched_records_stay_valid(self) -> None:
+        """Several records batched into one message remain valid."""
+        handler = AsyncTelegramHandler(
+            TOKEN, CHAT_ID, parse_mode="HTML",
+            formatter=TelegramHtmlFormatter(),
+        )
+        records = [
+            _create_record(f"line {i}: a<b & c>d") for i in range(5)
+        ]
+        messages = handler._build_messages(records)
+        assert len(messages) == 1
+        _assert_valid_telegram_html(messages[0])
+
+    def test_non_html_mode_keeps_hard_split(self) -> None:
+        """Without parse_mode="HTML" the split stays character-based."""
+        handler = AsyncTelegramHandler(
+            TOKEN, CHAT_ID, parse_mode="MarkdownV2",
+            max_message_length=10,
+        )
+        assert handler._split_text("x" * 25) == [
+            "x" * 10, "x" * 10, "x" * 5
+        ]
+
+    @pytest.mark.asyncio
+    async def test_html_payloads_sent_are_valid(self) -> None:
+        """End to end: what leaves the handler is valid, escaped HTML."""
+        requests: List[httpx.Request] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json={"ok": True})
+
+        handler = _make_handler(
+            respond,
+            parse_mode="HTML",
+            formatter=TelegramHtmlFormatter(),
+            max_message_length=200,
+        )
+
+        await handler.flush([
+            _create_record("tick <index> & sons " * 20),
+            _create_record("second & <last>"),
+        ])
+        await handler.close()
+
+        assert len(requests) > 1
+        for request in requests:
+            payload = json.loads(request.content)
+            assert payload["parse_mode"] == "HTML"
+            assert len(payload["text"]) <= 200
+            _assert_valid_telegram_html(payload["text"])
 
 
 class TestTelegramSending:

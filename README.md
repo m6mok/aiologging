@@ -34,9 +34,6 @@ pip install aiologging[aiofiles]
 pip install aiologging[aiohttp]
 pip install aiologging[httpx]
 
-# For Protobuf support
-pip install aiologging[protobuf]
-
 # All dependencies
 pip install aiologging[all]
 
@@ -248,12 +245,26 @@ async def main():
         token="123456:ABC-DEF...",   # from @BotFather
         chat_id="-1001234567890",    # or "@channelname"
         level=aiologging.ERROR,
-        parse_mode=None,             # or "HTML" / "MarkdownV2"
+        parse_mode="HTML",
+        formatter=aiologging.TelegramHtmlFormatter(),
     ))
 
-    await logger.error("This will be sent to Telegram")
+    await logger.error("queue < limit & load > 80%")  # escaped safely
     await aiologging.shutdown()
 ```
+
+With `parse_mode="HTML"`, pair the handler with the bundled
+`TelegramHtmlFormatter`: it HTML-escapes the message, logger name,
+`funcName` and the traceback (wrapped in `<pre>`), while the format
+template itself may carry Telegram markup — the default template is
+`<code>%(asctime)s</code> <b>%(levelname)s</b>\nFrom
+%(name)s:%(funcName)s\n%(message)s` (both `fmt` and `datefmt` are
+configurable). Splitting over-long records is entity-safe in HTML
+mode: a message part never ends inside a tag or `&...;` entity, and
+open tags are closed at the end of a part and reopened in the next.
+With `"Markdown"`/`"MarkdownV2"` escaping stays the formatter's
+responsibility and over-long records are hard-split at the character
+limit (a documented limitation).
 
 ### Custom Authentication
 
@@ -285,14 +296,6 @@ json_handler = aiologging.AsyncHttpJsonHandler(
 
 ```python
 text_handler = aiologging.AsyncHttpTextHandler(
-    "https://api.example.com/logs"
-)
-```
-
-### Protobuf Handler (requires protobuf)
-
-```python
-proto_handler = aiologging.AsyncHttpProtoHandler(
     "https://api.example.com/logs"
 )
 ```
@@ -388,6 +391,14 @@ import aiologging
 
 config = {
     "version": 1,
+    "formatters": {
+        "detailed": {
+            "format": "%(asctime)s %(levelname)s %(name)s %(message)s",
+            "datefmt": "%H:%M:%S"
+            # optional "class": dotted path, e.g.
+            # "aiologging.formatters.TelegramHtmlFormatter"
+        }
+    },
     "loggers": {
         "myapp": {
             "level": "INFO",
@@ -398,7 +409,9 @@ config = {
         "console": {
             "class": "stream",
             "level": "INFO",
-            "stream": "stdout"
+            "stream": "stdout",          # or "stderr" (default),
+                                         # "ext://sys.stdout" works too
+            "formatter": "detailed"
         },
         "file": {
             "class": "file",
@@ -418,6 +431,14 @@ async def main():
 
 asyncio.run(main())
 ```
+
+Configured loggers live in the global aiologging hierarchy: they
+have a `parent`, their records propagate to ancestor handlers
+(`propagate: false` opts out), and `aiologging.flush()` /
+`aiologging.shutdown()` drain their handlers — including the
+partially filled buffer of a batched handler such as Telegram.
+Unknown configuration keys raise `ConfigurationError` instead of
+being silently ignored.
 
 A handler's `"class"` is either a built-in name (`stream`, `file`,
 `http`, `http_json`, `telegram`, `rotating_file`,
@@ -507,7 +528,6 @@ Sync (identical to `logging.Logger`):
 - `AsyncHttpHandler` - Universal HTTP handler (requires aiohttp or httpx)
 - `AsyncHttpTextHandler` - Plain text HTTP handler (requires aiohttp or httpx)
 - `AsyncHttpJsonHandler` - JSON HTTP handler (requires aiohttp or httpx)
-- `AsyncHttpProtoHandler` - Protobuf HTTP handler (requires aiohttp or httpx, plus protobuf)
 - `StdlibBridgeHandler` - Sync `logging.Handler` forwarding records into aiologging
 
 ### Configuration Classes
@@ -571,6 +591,45 @@ mypy aiologging
 MIT License - see LICENSE file for details.
 
 ## Changelog
+
+### 0.2.11
+
+Telegram HTML safety and ConfigManager integration with the global
+hierarchy (preparing the library for services replacing
+`python-telegram-handler` + `dictConfig`):
+
+- New `TelegramHtmlFormatter` (`aiologging.formatters`): HTML-escapes
+  the message, logger name, `funcName`, the traceback (wrapped in
+  `<pre>`) and stack info, while the format template keeps its own
+  Telegram markup; template and `datefmt` are configurable, default
+  template matches python-telegram-handler's `HtmlFormatter`
+- `AsyncTelegramHandler` splitting/batching is entity-safe with
+  `parse_mode="HTML"`: a message boundary never falls inside a tag
+  or `&...;` entity, and open tags are closed at the end of a part
+  and reopened (with attributes) in the next — an over-long record
+  can no longer produce a 400 that loses the whole batch. Markdown
+  modes keep the hard split (documented limitation)
+- Fixed: `ConfigManager` built loggers outside the global hierarchy —
+  no `parent`, no propagation to root, and global
+  `flush()`/`shutdown()` never force-flushed their buffered handlers,
+  so the undersized tail of a Telegram batch could be lost at
+  shutdown. Config loggers now come from the global `getLogger()`
+  with the configuration applied on top, stdlib-dictConfig-style
+- `configure_from_dict` parity: a `formatters` section (`format`,
+  `datefmt`, optional `class` dotted path) referenced by handlers
+  via `formatter`; the `stream` handler honours
+  `stdout`/`stderr`/`ext://sys.*` targets (the key was silently
+  ignored before); unknown configuration keys now raise
+  `ConfigurationError` instead of being silently ignored
+- Removed `AsyncHttpProtoHandler` and the `protobuf` extra: the
+  serialization was a JSON stub mislabelled as protobuf and
+  `proto_message_class` was unused — fictional functionality is
+  worse than absent functionality
+- Fixed timed-rotation backup sorting for `when="S"`: the
+  `YYYY-MM-DD_HH-MM-SS` suffix never parsed and always fell back to
+  file mtime; rotating handlers coverage extended (timed schedule
+  branches for `midnight`/`W0`–`W6`/`at_time`/`utc`, rotation with
+  an unavailable `tell()`)
 
 ### 0.2.10
 

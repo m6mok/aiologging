@@ -5,11 +5,13 @@ Tests for the configuration module.
 import json
 import logging
 import os
+import sys
 import pytest
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+import aiologging
 from aiologging.config import (
     ConfigManager,
     get_config_manager,
@@ -18,11 +20,14 @@ from aiologging.config import (
     configure_from_env,
     get_configured_logger,
 )
-from typing import Any
+from typing import Any, List, Optional
 
 from aiologging.exceptions import ConfigurationError
+from aiologging.formatters import TelegramHtmlFormatter
+from aiologging.handlers.base import AsyncHandler, BufferedAsyncHandler
 from aiologging.handlers.stream import AsyncStreamHandler
 from aiologging.handlers.file import AsyncFileHandler
+from aiologging.logger import _logger_manager
 
 
 class DottedPathHandler(AsyncStreamHandler):
@@ -31,6 +36,58 @@ class DottedPathHandler(AsyncStreamHandler):
     def __init__(self, tag: str = "", **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.tag = tag
+
+
+class NotAFormatter:
+    """Constructible like a formatter, but without its methods."""
+
+    def __init__(
+        self, fmt: "Optional[str]" = None, datefmt: "Optional[str]" = None
+    ) -> None:
+        self.fmt = fmt
+        self.datefmt = datefmt
+
+
+class CollectingHandler(AsyncHandler):
+    """Handler that records everything it receives."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.records: List[logging.LogRecord] = []
+
+    async def _emit(
+        self, record: logging.LogRecord, formatted_message: str
+    ) -> None:
+        self.records.append(record)
+
+
+class BufferedCollectorHandler(BufferedAsyncHandler):
+    """Buffered handler recording what force_flush delivers."""
+
+    last_instance: "Optional[BufferedCollectorHandler]" = None
+
+    def __init__(self, **kwargs: Any) -> None:
+        # Large buffer, no auto-flush: records stay buffered until
+        # someone (e.g. shutdown) forces a flush
+        super().__init__(buffer_size=1000, auto_flush=False, **kwargs)
+        self.flushed: List[logging.LogRecord] = []
+        BufferedCollectorHandler.last_instance = self
+
+    async def emit(self, record: logging.LogRecord) -> None:
+        await self.handle(record)
+
+    async def _emit(
+        self, record: logging.LogRecord, formatted_message: str
+    ) -> None:
+        pass
+
+    async def flush(
+        self, records: "Optional[List[logging.LogRecord]]" = None
+    ) -> None:
+        if records is None:
+            await self.force_flush()
+            return
+        self.flushed.extend(records)
 
 
 class TestConfigManager:
@@ -739,6 +796,360 @@ class TestCustomHandlerClasses:
             ConfigurationError, match="Cannot create handler"
         ):
             manager.get_logger("test")
+
+
+class TestGlobalHierarchyIntegration:
+    """Config loggers must live in the global aiologging hierarchy."""
+
+    @staticmethod
+    def _config(
+        name: str, handler: dict, **logger_extra: Any
+    ) -> dict:
+        return {
+            "version": 1,
+            "loggers": {
+                name: {
+                    "level": "INFO",
+                    "handlers": ["h"],
+                    **logger_extra,
+                }
+            },
+            "handlers": {"h": handler},
+        }
+
+    def test_logger_registered_in_global_hierarchy(self) -> None:
+        """The config logger has a parent and is in loggerDict."""
+        manager = ConfigManager()
+        manager.load_from_dict(self._config(
+            "cfgapp.sub", {"class": "stream", "stream": "stderr"}
+        ))
+
+        logger = manager.get_logger("cfgapp.sub")
+
+        assert "cfgapp.sub" in _logger_manager.loggerDict
+        assert aiologging.getLogger("cfgapp.sub") is logger
+        assert logger.parent is aiologging.getLogger("cfgapp")
+        assert logger.parent.parent is _logger_manager.root
+
+    def test_existing_logger_is_configured_not_replaced(self) -> None:
+        """A logger obtained earlier via getLogger gets the config."""
+        early = aiologging.getLogger("cfgearly")
+        manager = ConfigManager()
+        manager.load_from_dict(self._config(
+            "cfgearly",
+            {"class": "stream", "stream": "stderr"},
+            propagate=False,
+        ))
+
+        configured = manager.get_logger("cfgearly")
+
+        assert configured is early
+        assert early.level == logging.INFO
+        assert early.propagate is False
+        assert len(early.handlers) == 1
+
+    @pytest.mark.asyncio
+    async def test_propagation_reaches_root_handlers(self) -> None:
+        """Records from a config logger reach root handlers."""
+        collector = CollectingHandler(level=logging.INFO)
+        aiologging.getLogger().addHandler(collector)
+
+        manager = ConfigManager()
+        manager.load_from_dict(self._config(
+            "cfgprop", {"class": "stream", "stream": "stderr"}
+        ))
+        logger = manager.get_logger("cfgprop")
+
+        await logger.info("propagated to root")
+        await aiologging.flush()
+
+        assert [
+            record.getMessage() for record in collector.records
+        ] == ["propagated to root"]
+
+    @pytest.mark.asyncio
+    async def test_buffered_handler_flushed_on_shutdown(self) -> None:
+        """shutdown() force-flushes a config logger's buffered tail."""
+        manager = ConfigManager()
+        manager.load_from_dict(self._config(
+            "cfgbuf",
+            {"class": "tests.test_config.BufferedCollectorHandler"},
+            propagate=False,
+        ))
+        logger = manager.get_logger("cfgbuf")
+        handler = BufferedCollectorHandler.last_instance
+        assert handler is not None
+
+        await logger.info("buffered tail")
+        # The under-filled buffer holds the record until shutdown's
+        # drain force-flushes every handler in the hierarchy
+        await aiologging.shutdown()
+        assert [
+            record.getMessage() for record in handler.flushed
+        ] == ["buffered tail"]
+
+    @pytest.mark.asyncio
+    async def test_stale_cache_rebuilt_after_shutdown(self) -> None:
+        """After a global shutdown the manager rebuilds the logger."""
+        manager = ConfigManager()
+        manager.load_from_dict(self._config(
+            "cfgcache", {"class": "stream", "stream": "stderr"}
+        ))
+        before = manager.get_logger("cfgcache")
+        await aiologging.shutdown()
+
+        after = manager.get_logger("cfgcache")
+
+        assert after is not before
+        assert not after._closed
+        assert aiologging.getLogger("cfgcache") is after
+
+
+class TestFormattersSection:
+    """Test cases for the dictConfig-style formatters section."""
+
+    @staticmethod
+    def _config(
+        formatters: dict, handler_extra: "Optional[dict]" = None
+    ) -> dict:
+        return {
+            "version": 1,
+            "formatters": formatters,
+            "loggers": {
+                "fmtapp": {"level": "INFO", "handlers": ["h"]}
+            },
+            "handlers": {
+                "h": {
+                    "class": "stream",
+                    "stream": "stderr",
+                    **(handler_extra or {}),
+                }
+            },
+        }
+
+    def test_formatter_applied_to_handler(self) -> None:
+        """format and datefmt reach the handler's formatter."""
+        manager = ConfigManager()
+        manager.load_from_dict(self._config(
+            {"plain": {
+                "format": "%(levelname)s :: %(message)s",
+                "datefmt": "%Y",
+            }},
+            {"formatter": "plain"},
+        ))
+
+        logger = manager.get_logger("fmtapp")
+        formatter = logger.handlers[0].formatter
+
+        assert isinstance(formatter, logging.Formatter)
+        record = logging.LogRecord(
+            "fmtapp", logging.INFO, "", 0, "hey", (), None
+        )
+        assert formatter.format(record) == "INFO :: hey"
+
+    def test_formatter_instance_shared_between_handlers(self) -> None:
+        """Handlers referencing the same name share one instance."""
+        manager = ConfigManager()
+        config = self._config(
+            {"plain": {"format": "%(message)s"}},
+            {"formatter": "plain"},
+        )
+        config["handlers"]["h2"] = {
+            "class": "stream",
+            "stream": "stdout",
+            "formatter": "plain",
+        }
+        config["loggers"]["fmtapp"]["handlers"] = ["h", "h2"]
+        manager.load_from_dict(config)
+
+        logger = manager.get_logger("fmtapp")
+
+        assert logger.handlers[0].formatter is logger.handlers[1].formatter
+
+    def test_formatter_class_dotted_path(self) -> None:
+        """class resolves a dotted path like TelegramHtmlFormatter."""
+        manager = ConfigManager()
+        manager.load_from_dict(self._config(
+            {"tg": {
+                "class": "aiologging.formatters.TelegramHtmlFormatter"
+            }},
+            {"formatter": "tg"},
+        ))
+
+        logger = manager.get_logger("fmtapp")
+
+        assert isinstance(
+            logger.handlers[0].formatter, TelegramHtmlFormatter
+        )
+
+    def test_formatter_class_not_importable(self) -> None:
+        """A missing formatter module raises ConfigurationError."""
+        manager = ConfigManager()
+        manager.load_from_dict(self._config(
+            {"bad": {"class": "no.such.module.Formatter"}},
+            {"formatter": "bad"},
+        ))
+        with pytest.raises(
+            ConfigurationError, match="Cannot import formatter class"
+        ):
+            manager.get_logger("fmtapp")
+
+    def test_formatter_class_not_a_formatter(self) -> None:
+        """A class without the formatter methods is rejected."""
+        manager = ConfigManager()
+        manager.load_from_dict(self._config(
+            {"bad": {"class": "tests.test_config.NotAFormatter"}},
+            {"formatter": "bad"},
+        ))
+        with pytest.raises(
+            ConfigurationError, match="FormatterProtocol"
+        ):
+            manager.get_logger("fmtapp")
+
+    def test_unknown_formatter_reference_rejected(self) -> None:
+        """A handler referencing a missing formatter fails at load."""
+        manager = ConfigManager()
+        with pytest.raises(
+            ConfigurationError, match="unknown formatter"
+        ):
+            manager.load_from_dict(self._config(
+                {}, {"formatter": "nope"}
+            ))
+
+    def test_custom_handler_gets_formatter_not_kwarg(self) -> None:
+        """For custom classes 'formatter' is a reference, not a kwarg."""
+        manager = ConfigManager()
+        manager.load_from_dict(self._config(
+            {"plain": {"format": "%(message)s"}},
+            {
+                "class": "tests.test_config.DottedPathHandler",
+                "formatter": "plain",
+            },
+        ))
+
+        logger = manager.get_logger("fmtapp")
+        handler = logger.handlers[0]
+
+        assert isinstance(handler, DottedPathHandler)
+        assert isinstance(handler.formatter, logging.Formatter)
+
+
+class TestStreamTargetKey:
+    """Test cases for the stream handler's 'stream' key."""
+
+    @staticmethod
+    def _handler_config(target: str) -> dict:
+        return {
+            "version": 1,
+            "loggers": {
+                "streamapp": {"level": "INFO", "handlers": ["h"]}
+            },
+            "handlers": {"h": {"class": "stream", "stream": target}},
+        }
+
+    @pytest.mark.parametrize(
+        "target,expected",
+        [
+            ("stdout", "stdout"),
+            ("ext://sys.stdout", "stdout"),
+            ("stderr", "stderr"),
+            ("ext://sys.stderr", "stderr"),
+        ],
+    )
+    def test_stream_target_resolved(
+        self, target: str, expected: str
+    ) -> None:
+        """stdout/stderr and their ext:// aliases are honoured."""
+        manager = ConfigManager()
+        manager.load_from_dict(self._handler_config(target))
+
+        logger = manager.get_logger("streamapp")
+
+        assert logger.handlers[0].stream is getattr(sys, expected)
+
+    def test_stream_defaults_to_stderr(self) -> None:
+        """Without a stream key the handler writes to stderr."""
+        manager = ConfigManager()
+        config = self._handler_config("stdout")
+        del config["handlers"]["h"]["stream"]
+        manager.load_from_dict(config)
+
+        logger = manager.get_logger("streamapp")
+
+        assert logger.handlers[0].stream is sys.stderr
+
+    def test_unsupported_stream_rejected(self) -> None:
+        """An unknown stream target raises ConfigurationError."""
+        manager = ConfigManager()
+        manager.load_from_dict(self._handler_config("ext://sys.foo"))
+        with pytest.raises(
+            ConfigurationError, match="Unsupported stream"
+        ):
+            manager.get_logger("streamapp")
+
+
+class TestStrictConfigKeys:
+    """Unknown configuration keys must fail loudly."""
+
+    @staticmethod
+    def _base_config() -> dict:
+        return {
+            "version": 1,
+            "loggers": {
+                "strictapp": {"level": "INFO", "handlers": ["h"]}
+            },
+            "handlers": {"h": {"class": "stream", "stream": "stderr"}},
+        }
+
+    def test_unknown_top_level_key_rejected(self) -> None:
+        manager = ConfigManager()
+        config = self._base_config()
+        config["fromatters"] = {}
+        with pytest.raises(
+            ConfigurationError, match="Unknown key.*fromatters"
+        ):
+            manager.load_from_dict(config)
+
+    def test_unknown_logger_key_rejected(self) -> None:
+        manager = ConfigManager()
+        config = self._base_config()
+        config["loggers"]["strictapp"]["propogate"] = False
+        with pytest.raises(
+            ConfigurationError, match="Unknown key.*propogate"
+        ):
+            manager.load_from_dict(config)
+
+    def test_unknown_builtin_handler_key_rejected(self) -> None:
+        manager = ConfigManager()
+        config = self._base_config()
+        config["handlers"]["h"]["formater"] = "plain"
+        with pytest.raises(
+            ConfigurationError, match="Unknown key.*formater"
+        ):
+            manager.load_from_dict(config)
+
+    def test_unknown_formatter_key_rejected(self) -> None:
+        manager = ConfigManager()
+        config = self._base_config()
+        config["formatters"] = {"plain": {"fmt": "%(message)s"}}
+        with pytest.raises(
+            ConfigurationError, match="Unknown key.*fmt"
+        ):
+            manager.load_from_dict(config)
+
+    def test_custom_handler_keys_stay_free_form(self) -> None:
+        """Dotted-path handler kwargs are not key-checked at load."""
+        manager = ConfigManager()
+        config = self._base_config()
+        config["handlers"]["h"] = {
+            "class": "tests.test_config.DottedPathHandler",
+            "tag": "anything-goes",
+        }
+        manager.load_from_dict(config)
+
+        logger = manager.get_logger("strictapp")
+
+        assert logger.handlers[0].tag == "anything-goes"
 
 
 class TestGlobalFunctions:

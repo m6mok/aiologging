@@ -239,7 +239,6 @@ BatchProcessor = Callable[[List[LogRecord]], Awaitable[None]]
 HttpContentType: TypeAlias = Literal[
     "text/plain",
     "application/json",
-    "application/x-protobuf",
     "application/octet-stream",
     "application/xml",
     "text/xml",

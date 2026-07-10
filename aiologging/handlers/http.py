@@ -8,7 +8,6 @@ with support for different formats and extensible authentication.
 from __future__ import annotations
 
 import asyncio
-import json
 from abc import abstractmethod
 from logging import LogRecord, NOTSET
 from typing import Any, Dict, List, Optional, Union
@@ -49,15 +48,6 @@ try:
     HTTPX_AVAILABLE = True
 except ImportError:
     HTTPX_AVAILABLE = False
-
-# Try to import protobuf
-try:
-    from google.protobuf import message
-    assert message
-
-    PROTOBUF_AVAILABLE = True
-except ImportError:
-    PROTOBUF_AVAILABLE = False
 
 
 def _check_aiohttp() -> None:
@@ -143,17 +133,6 @@ class _HttpxResponseAdapter:
     async def text(self) -> str:
         """Response body decoded as text."""
         return self._response.text
-
-
-def _check_protobuf() -> None:
-    """Check if protobuf is available."""
-    if not PROTOBUF_AVAILABLE:
-        raise DependencyError(
-            "protobuf is required for AsyncHttpProtoHandler. "
-            "Install it with: pip install aiologging[protobuf]",
-            dependency_name="protobuf",
-            install_command="pip install aiologging[protobuf]",
-        )
 
 
 class AsyncHttpHandlerBase(BufferedAsyncHandler):
@@ -720,130 +699,6 @@ class AsyncHttpJsonHandler(AsyncHttpHandlerBase):
         return "application/json"
 
 
-class AsyncHttpProtoHandler(AsyncHttpHandlerBase):
-    """
-    Async HTTP handler that sends log records as Protocol Buffers.
-
-    This handler requires the protobuf library to be installed.
-    """
-
-    def __init__(
-        self,
-        url: str,
-        proto_message_class: Optional[type] = None,
-        method: str = "POST",
-        headers: Optional[HeadersType] = None,
-        params: Optional[ParamsType] = None,
-        timeout: float = 30.0,
-        verify_ssl: bool = True,
-        authenticator: Optional[AuthenticatorProtocol[Any, Any]] = None,
-        level: int = NOTSET,
-        formatter: Optional[FormatterProtocol] = None,
-        filters: Optional[List[FilterProtocol]] = None,
-        error_handler: Optional[ErrorHandler] = None,
-        batch_config: Optional[BatchConfig] = None,
-        backend: Optional[HttpBackendType] = None,
-    ) -> None:
-        """
-        Initialize the async HTTP protobuf handler.
-
-        Args:
-            url: The HTTP endpoint URL
-            proto_message_class: The protobuf message class to use
-            method: The HTTP method (defaults to 'POST')
-            headers: Additional HTTP headers
-            params: URL query parameters
-            timeout: Request timeout in seconds
-            verify_ssl: Whether to verify SSL certificates
-            authenticator: Optional authentication function
-            level: The logging level for this handler
-            formatter: The formatter to use for log records
-            filters: List of filters to apply to log records
-            error_handler: Optional error handler for exceptions
-            batch_config: Configuration for batch processing
-            backend: HTTP client backend to use ('aiohttp' or 'httpx')
-
-        Raises:
-            DependencyError: If the HTTP client or protobuf
-                             is not installed
-        """
-        _check_protobuf()
-
-        super().__init__(
-            url,
-            method,
-            headers,
-            params,
-            timeout,
-            verify_ssl,
-            authenticator,
-            level,
-            formatter,
-            filters,
-            error_handler,
-            batch_config,
-            backend=backend,
-        )
-
-        self.proto_message_class = proto_message_class
-
-    async def emit(self, record: LogRecord) -> None:
-        """
-        Emit a log record by adding it to the buffer.
-
-        Args:
-            record: The log record to emit
-        """
-        await self.handle(record)
-
-    async def _emit(self, record: LogRecord, formatted_message: str) -> None:
-        """Emit a log record (buffered handler uses flush instead)."""
-        # This is a buffered handler, so individual records
-        # are not emitted directly
-        # They are collected and sent in batches via flush()
-        pass
-
-    async def _prepare_request_data(self, records: List[LogRecord]) -> bytes:
-        """Prepare request data as Protocol Buffers."""
-        if self.proto_message_class is None:
-            # Create a simple protobuf message if no class is provided
-            return self._create_simple_proto_message(records)
-        else:
-            # Use the provided protobuf message class
-            return await self._create_custom_proto_message(records)
-
-    def _create_simple_proto_message(self, records: List[LogRecord]) -> bytes:
-        """Create a simple protobuf message from log records."""
-        # This is a simplified implementation
-        # In a real implementation, you would define proper protobuf messages
-        json_data = []
-        for record in records:
-            json_record = {
-                "timestamp": int(record.created * 1000),  # milliseconds
-                "level": record.levelname,
-                "logger": record.name,
-                "message": record.getMessage(),
-                "formatted": self.format(record),
-            }
-            json_data.append(json_record)
-
-        # Convert to JSON and then to bytes (as a simple protobuf alternative)
-        return json.dumps(json_data).encode("utf-8")
-
-    async def _create_custom_proto_message(
-        self, records: List[LogRecord]
-    ) -> bytes:
-        """Create a custom protobuf message from log records."""
-        # This would be implemented based
-        # on the specific protobuf message class
-        # For now, fall back to the simple implementation
-        return self._create_simple_proto_message(records)
-
-    def _get_content_type(self) -> str:
-        """Get the content type for Protocol Buffers."""
-        return "application/x-protobuf"
-
-
 class AsyncHttpHandler(AsyncHttpHandlerBase):
     """
     Universal async HTTP handler with automatic format detection.
@@ -943,25 +798,6 @@ class AsyncHttpHandler(AsyncHttpHandlerBase):
             backend=self.backend,
         )
 
-        # Only create proto handler if protobuf is available
-        if PROTOBUF_AVAILABLE:
-            self._handlers["application/x-protobuf"] = AsyncHttpProtoHandler(
-                url,
-                None,
-                method,
-                headers,
-                params,
-                timeout,
-                verify_ssl,
-                authenticator,
-                level,
-                formatter,
-                filters,
-                error_handler,
-                batch_config,
-                backend=self.backend,
-            )
-
     async def emit(self, record: LogRecord) -> None:
         """
         Emit a log record by adding it to the buffer.
@@ -992,8 +828,6 @@ class AsyncHttpHandler(AsyncHttpHandlerBase):
         content_type = self.headers.get("Content-Type", "").lower()
         if "json" in content_type:
             return "application/json"
-        elif "protobuf" in content_type or "x-protobuf" in content_type:
-            return "application/x-protobuf"
         else:
             # Default to text/plain
             return "text/plain"
