@@ -30,3 +30,35 @@ __all__ = [
     "AsyncHttpHandler",
     "AsyncTelegramHandler",
 ]
+
+
+# Standard handler names use the shared stdlib configuration. File rotation
+# variants report failures explicitly for confirmed durable delivery.
+import logging.handlers as _stdlib_handlers
+from typing import Any
+from ..extensions.files import (
+    RotatingFileHandler as RotatingFileHandler,
+    TimedRotatingFileHandler as TimedRotatingFileHandler,
+)
+
+
+def __getattr__(name: str) -> Any:
+    return getattr(_stdlib_handlers, name)
+
+
+__all__ += [
+    "BaseRotatingHandler",
+    "RotatingFileHandler",
+    "TimedRotatingFileHandler",
+    "WatchedFileHandler",
+    "SocketHandler",
+    "DatagramHandler",
+    "SysLogHandler",
+    "SMTPHandler",
+    "NTEventLogHandler",
+    "HTTPHandler",
+    "BufferingHandler",
+    "MemoryHandler",
+    "QueueHandler",
+    "QueueListener",
+]

@@ -21,6 +21,7 @@ from aiologging.exceptions import HandlerError, FormatterError
 # Concrete implementations for testing abstract classes
 class AsyncHandlerImpl(AsyncHandler):
     """Concrete implementation of AsyncHandler for testing."""
+
     async def _emit(
         self, record: logging.LogRecord, formatted_message: str
     ) -> None:
@@ -30,6 +31,7 @@ class AsyncHandlerImpl(AsyncHandler):
 
 class BufferedAsyncHandlerImpl(BufferedAsyncHandler):
     """Concrete implementation of BufferedAsyncHandler for testing."""
+
     async def _emit(
         self, record: logging.LogRecord, formatted_message: str
     ) -> None:
@@ -43,6 +45,7 @@ class BufferedAsyncHandlerImpl(BufferedAsyncHandler):
 
 class AsyncHandlerImplWithError(AsyncHandler):
     """Concrete implementation of AsyncHandler for testing error handling."""
+
     async def _emit(
         self, record: logging.LogRecord, formatted_message: str
     ) -> None:
@@ -342,17 +345,13 @@ class TestBufferedAsyncHandler:
         flushed: List[logging.LogRecord] = []
 
         class Collecting(BufferedAsyncHandlerImpl):
-            async def flush(
-                self, records: List[logging.LogRecord]
-            ) -> None:
+            async def flush(self, records: List[logging.LogRecord]) -> None:
                 flushed.extend(records)
 
         handler = Collecting(
             buffer_size=10_000, auto_flush=False, max_batch_size=100
         )
-        records = self._create_test_records(
-            *(f"msg {i}" for i in range(250))
-        )
+        records = self._create_test_records(*(f"msg {i}" for i in range(250)))
         for record in records:
             await handler.handle(record)
         assert len(handler._buffer) == 250
@@ -542,7 +541,7 @@ class TestConvenienceFunctions:
 
     def test_create_stream_handler(self) -> None:
         """Test creating stream handler."""
-        from aiologging import create_stream_handler
+        from aiologging.legacy import create_stream_handler
 
         handler = create_stream_handler(level=logging.DEBUG)
         assert isinstance(handler, AsyncStreamHandler)

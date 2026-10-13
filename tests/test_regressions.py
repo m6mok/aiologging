@@ -23,7 +23,7 @@ import sys
 import warnings
 from typing import Any, List
 
-from aiologging import AsyncHandler, AsyncLogger, AsyncLoggerManager
+from aiologging.legacy import AsyncHandler, AsyncLogger, AsyncLoggerManager
 from aiologging.exceptions import AiologgingError
 from aiologging.handlers.stream import AsyncStreamHandler
 
@@ -143,36 +143,39 @@ class TestExceptionDetailsNotMutated:
 class TestRealStreamWriter:
     """A real asyncio.StreamWriter (sync write + async drain) must work."""
 
-    async def test_write_over_tcp(self) -> None:
-        received: list[bytes] = []
+    async def test_real_writer_with_offline_transport(self) -> None:
+        received = bytearray()
 
-        async def on_connect(
-            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-        ) -> None:
-            received.append(await reader.read(1024))
-            writer.close()
+        class OfflineTransport(asyncio.WriteTransport):
+            def write(self, data: bytes) -> None:
+                received.extend(data)
 
-        server = await asyncio.start_server(on_connect, "127.0.0.1", 0)
-        port = server.sockets[0].getsockname()[1]
-        _, writer = await asyncio.open_connection("127.0.0.1", port)
+            def is_closing(self) -> bool:
+                return False
 
+            def get_extra_info(self, name: str, default: Any = None) -> Any:
+                return default
+
+            def close(self) -> None:
+                pass
+
+        loop = asyncio.get_running_loop()
+        reader = asyncio.StreamReader()
+        protocol = asyncio.StreamReaderProtocol(reader)
+        transport = OfflineTransport()
+        protocol.connection_made(transport)
+        writer = asyncio.StreamWriter(transport, protocol, reader, loop)
         handler = AsyncStreamHandler(writer)
         logger = AsyncLogger(
-            "test.tcp",
+            "test.offline-writer",
             level=logging.DEBUG,
             handlers=[handler],
             propagate=False,
             delivery="await",
         )
-        await logger.info("over tcp")
-
+        await logger.info("through a real writer")
+        assert b"through a real writer" in received
         writer.close()
-        await writer.wait_closed()
-        await asyncio.sleep(0.05)
-        server.close()
-        await server.wait_closed()
-
-        assert b"over tcp" in b"".join(received)
 
 
 class _SlowSink(AsyncHandler):

@@ -12,8 +12,8 @@ from typing import Any, List
 
 import pytest
 
-import aiologging
-from aiologging import captureStdlib
+import aiologging.legacy as aiologging
+from aiologging.legacy import captureStdlib
 from aiologging.bridge import StdlibBridgeHandler
 from aiologging.handlers.base import AsyncHandler
 from aiologging.logger import AsyncLoggerManager

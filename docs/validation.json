@@ -1,0 +1,247 @@
+{
+  "date": "2026-10-13",
+  "base_commit": "4f5b3c3c465d9daded4868b6bbd47833b7eb3f78",
+  "platform": "macOS arm64",
+  "runtime_tests": {
+    "3.11": {
+      "passed": 551,
+      "failed": 0
+    },
+    "3.12": {
+      "passed": 551,
+      "failed": 0
+    },
+    "3.13": {
+      "passed": 551,
+      "failed": 0
+    },
+    "3.14": {
+      "passed": 551,
+      "failed": 0
+    },
+    "3.15": {
+      "passed": 551,
+      "failed": 0
+    }
+  },
+  "coverage_percent": 88.7,
+  "coverage_gate_percent": 80,
+  "mypy": {
+    "strict": true,
+    "python_version": "3.11",
+    "actual_interpreters": [
+      "3.11",
+      "3.12",
+      "3.13",
+      "3.14",
+      "3.15"
+    ],
+    "source_files": 25,
+    "passed": true
+  },
+  "legacy_stress": {
+    "scenarios": 48,
+    "passed": 48,
+    "failed": 0
+  },
+  "examples": {
+    "scripts": 10,
+    "all_offline": true,
+    "passed_on": [
+      "3.14",
+      "3.15"
+    ]
+  },
+  "stdlib_only_core": {
+    "python": "3.15.0",
+    "python_no_site_flag": true,
+    "passed": true
+  },
+  "style": {
+    "inventory_count": 43,
+    "black": "passed",
+    "flake8_project_ci_max_line_length": 127,
+    "flake8": "passed"
+  },
+  "python_inventory": [
+    {
+      "path": "aiologging/__init__.py",
+      "sha256": "4cac1cc5da4f0661923e566ee6d80be5448691487487eb20f9170c23c432ad70"
+    },
+    {
+      "path": "aiologging/config.py",
+      "sha256": "c64bdb45dfa4db5117396b1b99ed725a20bc6275561acc32790714eda9730c31"
+    },
+    {
+      "path": "aiologging/durable.py",
+      "sha256": "bbf7cca0bb79e57d4de8450e6a04c623849f86db15f64cd106261913cebbfb09"
+    },
+    {
+      "path": "aiologging/extensions/__init__.py",
+      "sha256": "ab90313bde40014fd57b8624f4a343d6063b28d7b5a02de8f81cabd0b142dc12"
+    },
+    {
+      "path": "aiologging/extensions/files.py",
+      "sha256": "0ec4b45b2ecdc06360aec47fe2873adccc309de1fcc806c4740399a56bcd42e7"
+    },
+    {
+      "path": "aiologging/extensions/http.py",
+      "sha256": "40a3f6bfe37b539b71c98cc96f05d08bcb9c78463ecd0a9d1845223d006c466b"
+    },
+    {
+      "path": "aiologging/handlers/__init__.py",
+      "sha256": "62e330aa72d2510ddd01830fd5366e095dafbeda0d6e7459393ff70b65ea5b83"
+    },
+    {
+      "path": "aiologging/journal.py",
+      "sha256": "9c01369ee4707247dc2a6fb06a2200a3f29390919d317e3fec34edbc9f7e2d3f"
+    },
+    {
+      "path": "aiologging/legacy.py",
+      "sha256": "f3351bb5aa9420a23c871a06d1870d3d1913727c47ad4ffba3ae14f8a8e00397"
+    },
+    {
+      "path": "aiologging/legacy_config.py",
+      "sha256": "058ede60de8fc8e4d5314ac098e11c6debd720b6be260a52ab6535eafb5ddb9f"
+    },
+    {
+      "path": "aiologging/standard/__init__.py",
+      "sha256": "e7aff232404c384bff2132bbf0387276923c6d816be01a396e5accd407203493"
+    },
+    {
+      "path": "aiologging/standard/config.py",
+      "sha256": "fde3a69168722441d27a65df78ec991b33b200a9c2ee9b7109f584192af7d0fa"
+    },
+    {
+      "path": "aiologging/standard/handlers.py",
+      "sha256": "ca6ac16eb1cf749eed68f8d4ea6aba70aafa57f12e2aa3722c14c72b5d9483c8"
+    },
+    {
+      "path": "examples/_support.py",
+      "sha256": "cfc3f93c108bdd0139d3d47c67ca065b3202aae331c6579aa910f4894a0b5c01"
+    },
+    {
+      "path": "examples/basic_usage.py",
+      "sha256": "562c25632223c9698af5a6a4880a34a5fc6cf420e9f590cd04854dfa5a62e2ba"
+    },
+    {
+      "path": "examples/config_usage.py",
+      "sha256": "d036ffd2ca88bc8cb423e71a4347aa8ad30113276cc7d375cf320075d45a0f98"
+    },
+    {
+      "path": "examples/drop_policy.py",
+      "sha256": "ccabaea66d3907afd7e3371a2ae38093587ec558b728187e0508f9e14e1a5b4a"
+    },
+    {
+      "path": "examples/emergency_flush.py",
+      "sha256": "3046abffad5981d32e8cdd208ed2d37c5f9502a6ea0c93c7dc20735a9c174b91"
+    },
+    {
+      "path": "examples/file_logging.py",
+      "sha256": "534790786c995d36678f7864f4a286fd599d2f45c71c577404aa1cf3e598ab32"
+    },
+    {
+      "path": "examples/http_logging.py",
+      "sha256": "ea75f11528088651cc6c27c24c0f209f056e535ef44a86ab1c7f705554b46910"
+    },
+    {
+      "path": "examples/inline_alerts.py",
+      "sha256": "bb6f15960ddb547bcf94a3a7c9d7b8af414fe52cc166a6381298bd808e5ab754"
+    },
+    {
+      "path": "examples/stdlib_capture.py",
+      "sha256": "c1ca63c7b8e0e61ef6b2ee02f349c73c31e3d7352d292bdb9f0c9baaf7e34adf"
+    },
+    {
+      "path": "examples/telegram_logging.py",
+      "sha256": "ab7ba8ffce8ec04114fe3bc7c7b6b2cd5a26912f81a297e52e4f1d58c3ade8f6"
+    },
+    {
+      "path": "stress/durable.py",
+      "sha256": "3a12fc3d21022cab3662a3350912801bef5c9cafd2af5102d234c81d89b15966"
+    },
+    {
+      "path": "stress/scenarios/delivery.py",
+      "sha256": "8427b4e4a90d4a86a787ac78c6864932a488f63e231393d713d6637066c12475"
+    },
+    {
+      "path": "stress/scenarios/surface.py",
+      "sha256": "dc0faa5d6730920b218705ebebdc333002b6d674202e1b75a00510790825db95"
+    },
+    {
+      "path": "tests/conftest.py",
+      "sha256": "624b0fef657d20fa078172a4338f8846d578e4dd35bd351e2f1a25754a4100fc"
+    },
+    {
+      "path": "tests/durable/conftest.py",
+      "sha256": "7e84aef2cb614a5d84f50599d6376295fd116b152e986d82c44cc0ae52cf6b2d"
+    },
+    {
+      "path": "tests/durable/test_engine.py",
+      "sha256": "b55c88807fe43f463b973805492807e7ff0134199b52a866ff920d00e96de6f8"
+    },
+    {
+      "path": "tests/durable/test_extensions.py",
+      "sha256": "d062a7c83ec1f7a26a803fb3d05a2285c3f0a7edb04f1ac28b6a932d9bbbb03d"
+    },
+    {
+      "path": "tests/durable/test_journal.py",
+      "sha256": "9153a967aa7e2dd19b926571ec991780dbd19c26bd36b9b188de49d7cfe45023"
+    },
+    {
+      "path": "tests/durable/test_standard.py",
+      "sha256": "9555da923d116b3f103b920e7534cc7974a7c65b03a9183abfb0eb5d3ba9cdb3"
+    },
+    {
+      "path": "tests/test_bridge.py",
+      "sha256": "3a6ddaf3f8d313775a81e7b2ba458b465d7d9e8991095ea0cad47016990e38f9"
+    },
+    {
+      "path": "tests/test_config.py",
+      "sha256": "3237d53a55e1806f1f544a11e17d073367cd35f7be66e814b19baa7fd934b683"
+    },
+    {
+      "path": "tests/test_drop_policy.py",
+      "sha256": "33aa1e52893683518704f9624c16996cb7494b501fe067abd4d24fa44bf53b14"
+    },
+    {
+      "path": "tests/test_file_handlers.py",
+      "sha256": "f6a682bbdb02ee0b70401710f2a2e5c46505ee4f76912f8df855e73d44ae2d00"
+    },
+    {
+      "path": "tests/test_flush_sync.py",
+      "sha256": "be24652d1067ed971fe5f66b73959fd79766360455e7c8df617c2dc7f5b15f30"
+    },
+    {
+      "path": "tests/test_handlers.py",
+      "sha256": "f15e24c559e5f47b73c38706508094e59a78720d5570f0ca6098ed983ac7bfbc"
+    },
+    {
+      "path": "tests/test_inline_delivery.py",
+      "sha256": "ac0b96bbba150a8a5e2ac1a9d64a4db3f57bf1948971ccb50ad2c07dee57c7f2"
+    },
+    {
+      "path": "tests/test_logger.py",
+      "sha256": "4d371d387f3a90b2ee265af82ee5afcc3bea6dbcc39c54e811a205e3948b0cfb"
+    },
+    {
+      "path": "tests/test_loop_affinity.py",
+      "sha256": "278b8e314c271f1be52c6da5a41b9958e29478ee70c0fd64af96227f568f8737"
+    },
+    {
+      "path": "tests/test_regressions.py",
+      "sha256": "b88020fa86b88e1945dbf5ded8b42e6e29426399588a199893976d1f68fda6e7"
+    },
+    {
+      "path": "tests/test_telegram_handler.py",
+      "sha256": "cd09efd64cd492a6a411d92ab56140496ac9ad07be63963ff9e97447d3eab568"
+    }
+  ],
+  "limitations": [
+    "Ordinary stdlib handlers retain standard processing rather than universal delivery proof.",
+    "Use multiprocessing spawn; inherited engines and connections reject fork reuse.",
+    "Custom record objects are recovered as standard LogRecord snapshots.",
+    "Custom dispatch or emit mutations cannot affect another recipient snapshot.",
+    "Remote CI and package publishing have not been run; no release or version bump."
+  ]
+}

@@ -10,7 +10,7 @@ from typing import Any, Callable, List
 import httpx
 import pytest
 
-from aiologging.config import ConfigManager
+from aiologging.legacy_config import ConfigManager
 from aiologging.formatters import TelegramHtmlFormatter
 from aiologging.handlers.telegram import (
     AsyncTelegramHandler,
@@ -29,8 +29,13 @@ def _create_record(
 ) -> logging.LogRecord:
     """Create a test log record."""
     return logging.LogRecord(
-        name="test", level=level, pathname="", lineno=0,
-        msg=message, args=(), exc_info=None
+        name="test",
+        level=level,
+        pathname="",
+        lineno=0,
+        msg=message,
+        args=(),
+        exc_info=None,
     )
 
 
@@ -70,9 +75,7 @@ class TestAsyncTelegramHandlerInit:
         handler = AsyncTelegramHandler(
             TOKEN, CHAT_ID, api_base_url="http://localhost:8081/"
         )
-        assert handler.url == (
-            f"http://localhost:8081/bot{TOKEN}/sendMessage"
-        )
+        assert handler.url == (f"http://localhost:8081/bot{TOKEN}/sendMessage")
 
     def test_empty_token_rejected(self) -> None:
         """An empty token raises ConfigurationError."""
@@ -116,9 +119,7 @@ class TestTelegramMessageBuilding:
 
     def test_messages_split_at_limit(self) -> None:
         """A new message starts when the limit would be exceeded."""
-        handler = AsyncTelegramHandler(
-            TOKEN, CHAT_ID, max_message_length=10
-        )
+        handler = AsyncTelegramHandler(TOKEN, CHAT_ID, max_message_length=10)
         records = [
             _create_record("aaaa"),
             _create_record("bbbb"),
@@ -129,12 +130,12 @@ class TestTelegramMessageBuilding:
 
     def test_long_record_hard_split(self) -> None:
         """A single record longer than the limit is hard-split."""
-        handler = AsyncTelegramHandler(
-            TOKEN, CHAT_ID, max_message_length=10
-        )
+        handler = AsyncTelegramHandler(TOKEN, CHAT_ID, max_message_length=10)
         records = [_create_record("x" * 25)]
         assert handler._build_messages(records) == [
-            "x" * 10, "x" * 10, "x" * 5
+            "x" * 10,
+            "x" * 10,
+            "x" * 5,
         ]
 
     @pytest.mark.asyncio
@@ -150,13 +151,15 @@ class TestTelegramMessageBuilding:
         payloads = await handler._prepare_request_data(
             [_create_record("hello")]
         )
-        assert payloads == [{
-            "chat_id": CHAT_ID,
-            "text": "hello",
-            "parse_mode": "HTML",
-            "disable_notification": True,
-            "message_thread_id": 7,
-        }]
+        assert payloads == [
+            {
+                "chat_id": CHAT_ID,
+                "text": "hello",
+                "parse_mode": "HTML",
+                "disable_notification": True,
+                "message_thread_id": 7,
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_payload_minimal(self) -> None:
@@ -189,17 +192,17 @@ def _assert_valid_telegram_html(text: str) -> None:
         char = text[pos]
         if char in "<&":
             match = _HTML_TOKEN.match(text, pos)
-            assert match is not None, (
-                f"raw {char!r} at {pos}: {text[pos:pos + 20]!r}"
-            )
+            assert (
+                match is not None
+            ), f"raw {char!r} at {pos}: {text[pos:pos + 20]!r}"
             name = match.group(2)
             if name is not None:
                 name = name.lower()
                 assert name in _KNOWN_TAGS, f"unknown tag {name!r}"
                 if match.group(1):
-                    assert stack and stack[-1] == name, (
-                        f"unbalanced </{name}> in {text!r}"
-                    )
+                    assert (
+                        stack and stack[-1] == name
+                    ), f"unbalanced </{name}> in {text!r}"
                     stack.pop()
                 else:
                     stack.append(name)
@@ -215,9 +218,7 @@ class TestHtmlEntitySafeSplitting:
 
     def test_short_text_unsplit(self) -> None:
         """Text within the limit is returned as a single message."""
-        handler = AsyncTelegramHandler(
-            TOKEN, CHAT_ID, parse_mode="HTML"
-        )
+        handler = AsyncTelegramHandler(TOKEN, CHAT_ID, parse_mode="HTML")
         assert handler._split_text("<b>short</b>") == ["<b>short</b>"]
 
     def test_tag_closed_and_reopened_across_parts(self) -> None:
@@ -278,7 +279,9 @@ class TestHtmlEntitySafeSplitting:
     def test_record_split_at_bot_api_limit(self) -> None:
         """A formatted record with markup splits safely at 4096."""
         handler = AsyncTelegramHandler(
-            TOKEN, CHAT_ID, parse_mode="HTML",
+            TOKEN,
+            CHAT_ID,
+            parse_mode="HTML",
             formatter=TelegramHtmlFormatter(),
         )
         record = _create_record("long & <detail> " * 400)
@@ -291,12 +294,12 @@ class TestHtmlEntitySafeSplitting:
     def test_batched_records_stay_valid(self) -> None:
         """Several records batched into one message remain valid."""
         handler = AsyncTelegramHandler(
-            TOKEN, CHAT_ID, parse_mode="HTML",
+            TOKEN,
+            CHAT_ID,
+            parse_mode="HTML",
             formatter=TelegramHtmlFormatter(),
         )
-        records = [
-            _create_record(f"line {i}: a<b & c>d") for i in range(5)
-        ]
+        records = [_create_record(f"line {i}: a<b & c>d") for i in range(5)]
         messages = handler._build_messages(records)
         assert len(messages) == 1
         _assert_valid_telegram_html(messages[0])
@@ -304,12 +307,12 @@ class TestHtmlEntitySafeSplitting:
     def test_non_html_mode_keeps_hard_split(self) -> None:
         """Without parse_mode="HTML" the split stays character-based."""
         handler = AsyncTelegramHandler(
-            TOKEN, CHAT_ID, parse_mode="MarkdownV2",
+            TOKEN,
+            CHAT_ID,
+            parse_mode="MarkdownV2",
             max_message_length=10,
         )
-        assert handler._split_text("x" * 25) == [
-            "x" * 10, "x" * 10, "x" * 5
-        ]
+        assert handler._split_text("x" * 25) == ["x" * 10, "x" * 10, "x" * 5]
 
     @pytest.mark.asyncio
     async def test_html_payloads_sent_are_valid(self) -> None:
@@ -327,10 +330,12 @@ class TestHtmlEntitySafeSplitting:
             max_message_length=200,
         )
 
-        await handler.flush([
-            _create_record("tick <index> & sons " * 20),
-            _create_record("second & <last>"),
-        ])
+        await handler.flush(
+            [
+                _create_record("tick <index> & sons " * 20),
+                _create_record("second & <last>"),
+            ]
+        )
         await handler.close()
 
         assert len(requests) > 1
@@ -355,9 +360,9 @@ class TestTelegramSending:
 
         handler = _make_handler(respond)
 
-        await handler.flush([
-            _create_record("line 1"), _create_record("line 2")
-        ])
+        await handler.flush(
+            [_create_record("line 1"), _create_record("line 2")]
+        )
         await handler.close()
 
         assert len(requests) == 1
@@ -367,9 +372,7 @@ class TestTelegramSending:
             f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         )
         payload = json.loads(request.content)
-        assert payload == {
-            "chat_id": CHAT_ID, "text": "line 1\nline 2"
-        }
+        assert payload == {"chat_id": CHAT_ID, "text": "line 1\nline 2"}
 
     @pytest.mark.asyncio
     async def test_flush_sends_multiple_messages(self) -> None:
@@ -382,16 +385,16 @@ class TestTelegramSending:
 
         handler = _make_handler(respond, max_message_length=10)
 
-        await handler.flush([
-            _create_record("aaaa"),
-            _create_record("bbbb"),
-            _create_record("cccc"),
-        ])
+        await handler.flush(
+            [
+                _create_record("aaaa"),
+                _create_record("bbbb"),
+                _create_record("cccc"),
+            ]
+        )
         await handler.close()
 
-        texts = [
-            json.loads(request.content)["text"] for request in requests
-        ]
+        texts = [json.loads(request.content)["text"] for request in requests]
         assert texts == ["aaaa\nbbbb", "cccc"]
 
     @pytest.mark.asyncio
@@ -403,12 +406,15 @@ class TestTelegramSending:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return httpx.Response(429, json={
-                    "ok": False,
-                    "error_code": 429,
-                    "description": "Too Many Requests: retry after 0",
-                    "parameters": {"retry_after": 0},
-                })
+                return httpx.Response(
+                    429,
+                    json={
+                        "ok": False,
+                        "error_code": 429,
+                        "description": "Too Many Requests: retry after 0",
+                        "parameters": {"retry_after": 0},
+                    },
+                )
             return httpx.Response(200, json={"ok": True})
 
         handler = _make_handler(
@@ -431,11 +437,14 @@ class TestTelegramSending:
         def respond(request: httpx.Request) -> httpx.Response:
             nonlocal call_count
             call_count += 1
-            return httpx.Response(429, json={
-                "ok": False,
-                "error_code": 429,
-                "parameters": {"retry_after": 0},
-            })
+            return httpx.Response(
+                429,
+                json={
+                    "ok": False,
+                    "error_code": 429,
+                    "parameters": {"retry_after": 0},
+                },
+            )
 
         handler = _make_handler(
             respond,
@@ -456,11 +465,14 @@ class TestTelegramSending:
         def respond(request: httpx.Request) -> httpx.Response:
             nonlocal call_count
             call_count += 1
-            return httpx.Response(400, json={
-                "ok": False,
-                "error_code": 400,
-                "description": "Bad Request: chat not found",
-            })
+            return httpx.Response(
+                400,
+                json={
+                    "ok": False,
+                    "error_code": 400,
+                    "description": "Bad Request: chat not found",
+                },
+            )
 
         handler = _make_handler(
             respond,
@@ -495,7 +507,8 @@ class TestTelegramSending:
     def test_retry_delay_parsing(self) -> None:
         """retry_after is read from the 429 body, with fallbacks."""
         handler = AsyncTelegramHandler(
-            TOKEN, CHAT_ID,
+            TOKEN,
+            CHAT_ID,
             batch_config=BatchConfig(retry_delay=1.5),
         )
 
@@ -517,21 +530,23 @@ class TestTelegramConfig:
     def test_create_from_config(self) -> None:
         """The 'telegram' handler class is available in configs."""
         manager = ConfigManager()
-        manager.load_from_dict({
-            "version": 1,
-            "loggers": {
-                "app": {"level": "ERROR", "handlers": ["tg"]},
-            },
-            "handlers": {
-                "tg": {
-                    "class": "telegram",
-                    "level": "ERROR",
-                    "token": TOKEN,
-                    "chat_id": CHAT_ID,
-                    "parse_mode": "HTML",
+        manager.load_from_dict(
+            {
+                "version": 1,
+                "loggers": {
+                    "app": {"level": "ERROR", "handlers": ["tg"]},
                 },
-            },
-        })
+                "handlers": {
+                    "tg": {
+                        "class": "telegram",
+                        "level": "ERROR",
+                        "token": TOKEN,
+                        "chat_id": CHAT_ID,
+                        "parse_mode": "HTML",
+                    },
+                },
+            }
+        )
 
         logger = manager.get_logger("app")
         assert len(logger.handlers) == 1
@@ -544,13 +559,15 @@ class TestTelegramConfig:
     def test_config_requires_token(self) -> None:
         """A config without a token raises ConfigurationError."""
         manager = ConfigManager()
-        manager.load_from_dict({
-            "version": 1,
-            "loggers": {"app": {"handlers": ["tg"]}},
-            "handlers": {
-                "tg": {"class": "telegram", "chat_id": CHAT_ID},
-            },
-        })
+        manager.load_from_dict(
+            {
+                "version": 1,
+                "loggers": {"app": {"handlers": ["tg"]}},
+                "handlers": {
+                    "tg": {"class": "telegram", "chat_id": CHAT_ID},
+                },
+            }
+        )
         with pytest.raises(ConfigurationError, match="token"):
             manager.get_logger("app")
 

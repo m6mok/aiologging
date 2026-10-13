@@ -1,5 +1,10 @@
 # Stress testing
 
+The original harness below exercises the retained aiologging.legacy API.
+Durable correctness lives in tests/durable/, and equal-durability performance
+measurements run with python -m stress.durable; see durable-measurements.md.
+
+
 The `stress/` package is a standalone harness that pushes the library
 well past normal load and verifies both performance numbers and
 correctness invariants. It is **not** part of the pytest suite (no

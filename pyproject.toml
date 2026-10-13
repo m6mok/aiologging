@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aiologging"
 version = "0.2.11"
-description = "Asynchronous logging library mirroring the standard logging API, with queue-based non-blocking handlers"
+description = "Asynchronous logging library mirroring the standard logging API, with durable shared journaling"
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [
@@ -16,22 +16,19 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
+    "Operating System :: MacOS :: MacOS X",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: System :: Logging",
     "Typing :: Typed",
 ]
-requires-python = ">=3.9"
-dependencies = [
-    "typing-extensions>=4.0.0; python_version<'3.10'",
-]
+requires-python = ">=3.11,<3.16"
+dependencies = []
 
 [project.optional-dependencies]
 aiofiles = [
@@ -54,6 +51,7 @@ dev = [
     "pytest-cov>=4.0.0",
     "mypy>=1.0.0",
     "flake8>=6.0.0",
+    "black>=26.0.0",
     "types-aiofiles",
     "aiofiles>=23.0.0",
     "aiohttp>=3.8.0",
@@ -70,7 +68,7 @@ where = ["."]
 include = ["aiologging*"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
@@ -100,7 +98,6 @@ python_functions = ["test_*"]
 addopts = [
     "--cov=aiologging",
     "--cov-report=term-missing",
-    "--cov-report=html",
     "--cov-fail-under=80",
 ]
 
@@ -117,3 +114,7 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
 ]
+
+[tool.black]
+line-length = 79
+target-version = ["py311"]

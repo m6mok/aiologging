@@ -1,0 +1,306 @@
+{
+  "python": "3.14.6",
+  "platform": "macOS-26.7.1-arm64-arm-64bit-Mach-O",
+  "guarantees": "SQLite DELETE, synchronous FULL, fullfsync ON; unfinished records retained",
+  "cases": [
+    {
+      "record_text_bytes": 128,
+      "encoded_record_bytes": 675,
+      "producers": 1,
+      "commit_batch_limit": 1,
+      "records": 128,
+      "records_per_second": 87.9,
+      "acceptance_ms": {
+        "median": 10.986,
+        "p95": 14.729,
+        "p99": 15.275
+      },
+      "application_heartbeat_max_gap_ms": 2.499,
+      "database_bytes": 163840,
+      "reserved_bytes": 96128
+    },
+    {
+      "record_text_bytes": 128,
+      "encoded_record_bytes": 677,
+      "producers": 1,
+      "commit_batch_limit": 32,
+      "records": 128,
+      "records_per_second": 97.1,
+      "acceptance_ms": {
+        "median": 10.2,
+        "p95": 12.619,
+        "p99": 13.072
+      },
+      "application_heartbeat_max_gap_ms": 1.817,
+      "database_bytes": 163840,
+      "reserved_bytes": 96384
+    },
+    {
+      "record_text_bytes": 128,
+      "encoded_record_bytes": 677,
+      "producers": 8,
+      "commit_batch_limit": 1,
+      "records": 128,
+      "records_per_second": 93.0,
+      "acceptance_ms": {
+        "median": 87.109,
+        "p95": 93.535,
+        "p99": 94.611
+      },
+      "application_heartbeat_max_gap_ms": 2.02,
+      "database_bytes": 163840,
+      "reserved_bytes": 96384
+    },
+    {
+      "record_text_bytes": 128,
+      "encoded_record_bytes": 677,
+      "producers": 8,
+      "commit_batch_limit": 32,
+      "records": 128,
+      "records_per_second": 366.5,
+      "acceptance_ms": {
+        "median": 22.378,
+        "p95": 27.389,
+        "p99": 31.144
+      },
+      "application_heartbeat_max_gap_ms": 2.455,
+      "database_bytes": 163840,
+      "reserved_bytes": 96384
+    },
+    {
+      "record_text_bytes": 128,
+      "encoded_record_bytes": 676,
+      "producers": 32,
+      "commit_batch_limit": 1,
+      "records": 128,
+      "records_per_second": 91.2,
+      "acceptance_ms": {
+        "median": 343.882,
+        "p95": 359.207,
+        "p99": 365.749
+      },
+      "application_heartbeat_max_gap_ms": 1.938,
+      "database_bytes": 163840,
+      "reserved_bytes": 96256
+    },
+    {
+      "record_text_bytes": 128,
+      "encoded_record_bytes": 678,
+      "producers": 32,
+      "commit_batch_limit": 32,
+      "records": 128,
+      "records_per_second": 1306.6,
+      "acceptance_ms": {
+        "median": 24.298,
+        "p95": 28.766,
+        "p99": 28.768
+      },
+      "application_heartbeat_max_gap_ms": 3.789,
+      "database_bytes": 163840,
+      "reserved_bytes": 96512
+    },
+    {
+      "record_text_bytes": 4096,
+      "encoded_record_bytes": 8614,
+      "producers": 1,
+      "commit_batch_limit": 1,
+      "records": 128,
+      "records_per_second": 80.9,
+      "acceptance_ms": {
+        "median": 12.47,
+        "p95": 15.109,
+        "p99": 15.388
+      },
+      "application_heartbeat_max_gap_ms": 2.569,
+      "database_bytes": 1159168,
+      "reserved_bytes": 1112320
+    },
+    {
+      "record_text_bytes": 4096,
+      "encoded_record_bytes": 8614,
+      "producers": 1,
+      "commit_batch_limit": 32,
+      "records": 128,
+      "records_per_second": 79.9,
+      "acceptance_ms": {
+        "median": 12.414,
+        "p95": 14.855,
+        "p99": 15.891
+      },
+      "application_heartbeat_max_gap_ms": 2.042,
+      "database_bytes": 1159168,
+      "reserved_bytes": 1112320
+    },
+    {
+      "record_text_bytes": 4096,
+      "encoded_record_bytes": 8613,
+      "producers": 8,
+      "commit_batch_limit": 1,
+      "records": 128,
+      "records_per_second": 81.3,
+      "acceptance_ms": {
+        "median": 99.644,
+        "p95": 107.498,
+        "p99": 108.934
+      },
+      "application_heartbeat_max_gap_ms": 2.571,
+      "database_bytes": 1159168,
+      "reserved_bytes": 1112192
+    },
+    {
+      "record_text_bytes": 4096,
+      "encoded_record_bytes": 8613,
+      "producers": 8,
+      "commit_batch_limit": 32,
+      "records": 128,
+      "records_per_second": 358.6,
+      "acceptance_ms": {
+        "median": 23.855,
+        "p95": 28.058,
+        "p99": 28.551
+      },
+      "application_heartbeat_max_gap_ms": 2.731,
+      "database_bytes": 1159168,
+      "reserved_bytes": 1112192
+    },
+    {
+      "record_text_bytes": 4096,
+      "encoded_record_bytes": 8613,
+      "producers": 32,
+      "commit_batch_limit": 1,
+      "records": 128,
+      "records_per_second": 78.8,
+      "acceptance_ms": {
+        "median": 405.003,
+        "p95": 416.632,
+        "p99": 420.667
+      },
+      "application_heartbeat_max_gap_ms": 3.121,
+      "database_bytes": 1159168,
+      "reserved_bytes": 1112192
+    },
+    {
+      "record_text_bytes": 4096,
+      "encoded_record_bytes": 8613,
+      "producers": 32,
+      "commit_batch_limit": 32,
+      "records": 128,
+      "records_per_second": 1091.1,
+      "acceptance_ms": {
+        "median": 29.062,
+        "p95": 33.007,
+        "p99": 35.348
+      },
+      "application_heartbeat_max_gap_ms": 5.966,
+      "database_bytes": 1159168,
+      "reserved_bytes": 1112192
+    },
+    {
+      "record_text_bytes": 65536,
+      "encoded_record_bytes": 131495,
+      "producers": 1,
+      "commit_batch_limit": 1,
+      "records": 128,
+      "records_per_second": 81.6,
+      "acceptance_ms": {
+        "median": 12.388,
+        "p95": 14.283,
+        "p99": 15.29
+      },
+      "application_heartbeat_max_gap_ms": 3.197,
+      "database_bytes": 16916480,
+      "reserved_bytes": 16841088
+    },
+    {
+      "record_text_bytes": 65536,
+      "encoded_record_bytes": 131494,
+      "producers": 1,
+      "commit_batch_limit": 32,
+      "records": 128,
+      "records_per_second": 83.4,
+      "acceptance_ms": {
+        "median": 11.975,
+        "p95": 14.299,
+        "p99": 15.069
+      },
+      "application_heartbeat_max_gap_ms": 6.901,
+      "database_bytes": 16916480,
+      "reserved_bytes": 16840960
+    },
+    {
+      "record_text_bytes": 65536,
+      "encoded_record_bytes": 131495,
+      "producers": 8,
+      "commit_batch_limit": 1,
+      "records": 128,
+      "records_per_second": 83.8,
+      "acceptance_ms": {
+        "median": 95.19,
+        "p95": 106.273,
+        "p99": 114.725
+      },
+      "application_heartbeat_max_gap_ms": 3.683,
+      "database_bytes": 16916480,
+      "reserved_bytes": 16841088
+    },
+    {
+      "record_text_bytes": 65536,
+      "encoded_record_bytes": 131495,
+      "producers": 8,
+      "commit_batch_limit": 32,
+      "records": 128,
+      "records_per_second": 260.9,
+      "acceptance_ms": {
+        "median": 31.074,
+        "p95": 33.96,
+        "p99": 36.392
+      },
+      "application_heartbeat_max_gap_ms": 11.017,
+      "database_bytes": 16916480,
+      "reserved_bytes": 16841088
+    },
+    {
+      "record_text_bytes": 65536,
+      "encoded_record_bytes": 131495,
+      "producers": 32,
+      "commit_batch_limit": 1,
+      "records": 128,
+      "records_per_second": 84.5,
+      "acceptance_ms": {
+        "median": 362.488,
+        "p95": 413.407,
+        "p99": 415.085
+      },
+      "application_heartbeat_max_gap_ms": 4.226,
+      "database_bytes": 16916480,
+      "reserved_bytes": 16841088
+    },
+    {
+      "record_text_bytes": 65536,
+      "encoded_record_bytes": 131494,
+      "producers": 32,
+      "commit_batch_limit": 32,
+      "records": 128,
+      "records_per_second": 524.5,
+      "acceptance_ms": {
+        "median": 57.884,
+        "p95": 67.54,
+        "p99": 67.608
+      },
+      "application_heartbeat_max_gap_ms": 22.204,
+      "database_bytes": 16916480,
+      "reserved_bytes": 16840960
+    }
+  ],
+  "multiprocess": {
+    "processes": 4,
+    "records": 128,
+    "records_per_second_including_spawn": 78.4,
+    "producer_seconds": [
+      0.31836500000099477,
+      0.6487582090012438,
+      1.0249572499997157,
+      1.5141652090005664
+    ]
+  }
+}

@@ -13,7 +13,7 @@ import logging
 
 import pytest
 
-import aiologging
+import aiologging.legacy as aiologging
 from aiologging.bridge import captureStdlib
 
 

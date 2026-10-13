@@ -1,7 +1,7 @@
 .PHONY: all setup-envs test-all mypy-all quick-test quick-mypy stress stress-quick release check-versions clean help
 
 # Версии Python для тестирования через uv
-PYTHON_VERSIONS = 3.9 3.10 3.11 3.12 3.13 3.14
+PYTHON_VERSIONS = 3.11 3.12 3.13 3.14 3.15
 
 # Цель по умолчанию
 all: test-all mypy-all
@@ -11,7 +11,7 @@ setup-envs:
 	@echo "=== Настройка окружений для всех версий Python ==="
 	@for version in $(PYTHON_VERSIONS); do \
 		echo "--- Настройка окружения Python $$version ---"; \
-		VIRTUAL_ENV=.venv-$$version uv sync --active --python $$version --extra dev || echo "⚠️  Ошибка настройки для Python $$version"; \
+		VIRTUAL_ENV=.venv-$$version uv sync --active --python $$version --extra dev || exit $$?; \
 		echo ""; \
 	done
 
@@ -20,7 +20,7 @@ test-all: setup-envs
 	@echo "=== Запуск тестов на всех версиях Python ==="
 	@for version in $(PYTHON_VERSIONS); do \
 		echo "--- Тестирование Python $$version ---"; \
-		VIRTUAL_ENV=.venv-$$version uv run --active --python $$version pytest -q tests/ || echo "❌ Тесты Python $$version завершились с ошибкой"; \
+		VIRTUAL_ENV=.venv-$$version uv run --active --python $$version pytest -q tests/ || exit $$?; \
 		echo ""; \
 	done
 
@@ -29,7 +29,7 @@ mypy-all: setup-envs
 	@echo "=== Запуск mypy на всех версиях Python ==="
 	@for version in $(PYTHON_VERSIONS); do \
 		echo "--- Mypy проверка Python $$version ---"; \
-		VIRTUAL_ENV=.venv-$$version uv run --active --python $$version mypy --cache-dir .mypy_cache-$$version aiologging/ || echo "❌ Mypy Python $$version завершился с ошибкой"; \
+		VIRTUAL_ENV=.venv-$$version uv run --active --python $$version mypy --cache-dir .mypy_cache-$$version aiologging/ || exit $$?; \
 		echo ""; \
 	done
 
@@ -112,3 +112,7 @@ help:
 	@echo "  make check-versions   - Проверить установленные версии Python"
 	@echo "  make clean            - Очистить кэши и временные файлы"
 	@echo "  make help             - Показать эту справку"
+
+# Measurements compare FULL-synchronous modes, never timing-gate CI.
+stress-durable:
+	VIRTUAL_ENV=.venv-$(QUICK_VERSION) uv run --active --python $(QUICK_VERSION) python -m stress.durable --output logs/durable-benchmark.json

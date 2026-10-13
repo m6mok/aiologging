@@ -189,9 +189,7 @@ def flush_sync_loop_churn(ctx: Context) -> None:
 
     sent = cycles * count_each
     expected: Set[Tuple[int, int]] = {
-        (cycle, seq)
-        for cycle in range(cycles)
-        for seq in range(count_each)
+        (cycle, seq) for cycle in range(cycles) for seq in range(count_each)
     }
     pairs = sink.pairs()
     unique = set(pairs)
@@ -223,9 +221,7 @@ def flush_sync_loop_churn(ctx: Context) -> None:
         duplicates <= cycles,
         f"duplicates={duplicates}",
     )
-    ctx.check(
-        "nothing left undelivered", manager.undelivered() == 0
-    )
+    ctx.check("nothing left undelivered", manager.undelivered() == 0)
 
 
 @scenario("delivery.flush_sync_from_threads")
@@ -256,9 +252,7 @@ async def flush_sync_from_threads(ctx: Context) -> None:
             results.append(manager.flush_sync(timeout=30.0))
 
     threads = 3
-    await asyncio.gather(
-        *(asyncio.to_thread(flusher) for _ in range(threads))
-    )
+    await asyncio.gather(*(asyncio.to_thread(flusher) for _ in range(threads)))
     sent = await producing + 1  # + the warmup record
     await manager.flush()
 
@@ -350,9 +344,7 @@ def flush_sync_buffered_http(ctx: Context) -> None:
         len(delivered) == count,
         f"delivered={len(delivered)} sent={count}",
     )
-    ctx.check(
-        "nothing left undelivered", manager.undelivered() == 0
-    )
+    ctx.check("nothing left undelivered", manager.undelivered() == 0)
 
 
 # ----------------------------------------------------------------------
@@ -555,9 +547,7 @@ def inline_failing_send(ctx: Context) -> None:
         inline_timeout=1.0,
     )
     count = ctx.n(300, 60)
-    fake = _FakeUrlopen(
-        error=OSError("injected connection failure")
-    )
+    fake = _FakeUrlopen(error=OSError("injected connection failure"))
 
     with _PatchedUrlopen(fake):
         started = time.perf_counter()
@@ -640,9 +630,7 @@ def inline_mixed_levels(ctx: Context) -> None:
         stream_elapsed = time.perf_counter() - started
         drained = manager.flush_sync(timeout=60.0)
 
-    inline_lines = [
-        line for text in fake.posts for line in text.splitlines()
-    ]
+    inline_lines = [line for text in fake.posts for line in text.splitlines()]
     inline_inf = sum("MIXINF" in line for line in inline_lines)
     inline_err = sum("MIXERR" in line for line in inline_lines)
     queue_inf = sum("MIXINF" in line for line in queue_lines)
@@ -743,17 +731,13 @@ async def drop_policy_errors_survive(ctx: Context) -> None:
         errors_delivered == errors,
         f"delivered={errors_delivered} sent={errors}",
     )
-    ctx.check(
-        "low-severity records were actually sacrificed", dropped > 0
-    )
+    ctx.check("low-severity records were actually sacrificed", dropped > 0)
     ctx.check(
         "accounting balances (sent == delivered + dropped)",
         sent == sink.received + dropped,
         f"sent={sent} delivered={sink.received} dropped={dropped}",
     )
-    ctx.check(
-        "delivered records stay ordered", sink.ordered_per_producer()
-    )
+    ctx.check("delivered records stay ordered", sink.ordered_per_producer())
 
 
 @scenario("delivery.drop_policy_drop_new")
@@ -810,17 +794,13 @@ async def drop_policy_drop_new(ctx: Context) -> None:
         errors_delivered == errors,
         f"delivered={errors_delivered} sent={errors}",
     )
-    ctx.check(
-        "low-severity records were actually sacrificed", dropped > 0
-    )
+    ctx.check("low-severity records were actually sacrificed", dropped > 0)
     ctx.check(
         "accounting balances (sent == delivered + dropped)",
         sent == sink.received + dropped,
         f"sent={sent} delivered={sink.received} dropped={dropped}",
     )
-    ctx.check(
-        "delivered records stay ordered", sink.ordered_per_producer()
-    )
+    ctx.check("delivered records stay ordered", sink.ordered_per_producer())
 
 
 @scenario("delivery.drop_policy_bridge_threads")
@@ -899,17 +879,13 @@ async def drop_policy_bridge_threads(ctx: Context) -> None:
         errors_delivered == errors,
         f"delivered={errors_delivered} sent={errors}",
     )
-    ctx.check(
-        "low-severity records were actually sacrificed", dropped > 0
-    )
+    ctx.check("low-severity records were actually sacrificed", dropped > 0)
     ctx.check(
         "accounting balances (sent == delivered + dropped)",
         sent == sink.received + dropped,
         f"sent={sent} delivered={sink.received} dropped={dropped}",
     )
-    ctx.check(
-        "delivered records stay ordered", sink.ordered_per_producer()
-    )
+    ctx.check("delivered records stay ordered", sink.ordered_per_producer())
 
 
 @scenario("delivery.block_bridge_flood")
@@ -942,17 +918,12 @@ async def block_bridge_flood(ctx: Context) -> None:
     def thread_producer(worker: int) -> None:
         for seq in range(count_each):
             manager.enqueue_from_thread(
-                make_stdlib_record(
-                    "stress", seq=seq, producer=worker
-                )
+                make_stdlib_record("stress", seq=seq, producer=worker)
             )
 
     await asyncio.gather(
         *(one_producer(worker) for worker in range(producers)),
-        *(
-            asyncio.to_thread(thread_producer, 100 + i)
-            for i in range(threads)
-        ),
+        *(asyncio.to_thread(thread_producer, 100 + i) for i in range(threads)),
     )
     await manager.flush()
 
@@ -977,9 +948,7 @@ async def block_bridge_flood(ctx: Context) -> None:
         async_delivered == async_sent,
         f"delivered={async_delivered} sent={async_sent}",
     )
-    ctx.check(
-        "the bridge actually hit the full queue", dropped > 0
-    )
+    ctx.check("the bridge actually hit the full queue", dropped > 0)
     ctx.check(
         "only bridged records were shed",
         dropped <= threads * count_each,
@@ -990,12 +959,8 @@ async def block_bridge_flood(ctx: Context) -> None:
         sent == sink.received + dropped,
         f"sent={sent} delivered={sink.received} dropped={dropped}",
     )
-    ctx.check(
-        "no duplicates", len(sink.pairs()) == len(unique)
-    )
-    ctx.check(
-        "delivered records stay ordered", sink.ordered_per_producer()
-    )
+    ctx.check("no duplicates", len(sink.pairs()) == len(unique))
+    ctx.check("delivered records stay ordered", sink.ordered_per_producer())
 
 
 # ----------------------------------------------------------------------
@@ -1029,16 +994,11 @@ async def await_faulty_sink(ctx: Context) -> None:
             )
             # The await contract: by the time the call resolves the
             # record must already be in every sink.
-            if (
-                flaky.max_seq(worker) < seq
-                or healthy.max_seq(worker) < seq
-            ):
+            if flaky.max_seq(worker) < seq or healthy.max_seq(worker) < seq:
                 violations += 1
 
     started = time.perf_counter()
-    await asyncio.gather(
-        *(producer(worker) for worker in range(producers))
-    )
+    await asyncio.gather(*(producer(worker) for worker in range(producers)))
     elapsed = time.perf_counter() - started
     sent = producers * count_each
 
@@ -1051,9 +1011,7 @@ async def await_faulty_sink(ctx: Context) -> None:
             "await_contract_violations": violations,
         }
     )
-    ctx.check(
-        "failures were actually injected", flaky.injected_failures > 0
-    )
+    ctx.check("failures were actually injected", flaky.injected_failures > 0)
     ctx.check(
         "await resolution implies delivery to every sink",
         violations == 0,
@@ -1134,9 +1092,7 @@ async def await_cancelled_callers(ctx: Context) -> None:
     loop = asyncio.get_running_loop()
     for seq in range(count):
         task = loop.create_task(
-            logger.info(
-                "cancel %d", seq, extra={"seq": seq, "producer": 0}
-            )
+            logger.info("cancel %d", seq, extra={"seq": seq, "producer": 0})
         )
         # One tick: the task runs up to its `await fut` suspension
         # (the record is already on the queue), then gets cancelled.
@@ -1155,9 +1111,7 @@ async def await_cancelled_callers(ctx: Context) -> None:
     dropped = int(manager.get_metrics()["records_dropped"])
 
     # The consumer must still be alive and functional afterwards
-    await logger.info(
-        "post-cancel", extra={"seq": count, "producer": 0}
-    )
+    await logger.info("post-cancel", extra={"seq": count, "producer": 0})
     await manager.flush()
     survivor_delivered = sink.max_seq(0) == count
 
@@ -1202,7 +1156,7 @@ _ATEXIT_CHILD = """\
 import asyncio
 import sys
 
-import aiologging
+import aiologging.legacy as aiologging
 
 log_path = sys.argv[1]
 count = int(sys.argv[2])
@@ -1237,15 +1191,13 @@ def _run_atexit_child(
     Run the atexit child; returns (process, backlog reported by the
     child at exit, seq numbers found in the log file).
     """
-    import aiologging
+    import aiologging.legacy as aiologging
 
     script = ctx.tmpdir / "atexit_child.py"
     script.write_text(_ATEXIT_CHILD, encoding="utf-8")
     log_path = ctx.tmpdir / "atexit.log"
     env = dict(os.environ)
-    env["PYTHONPATH"] = str(
-        Path(aiologging.__file__).resolve().parents[1]
-    )
+    env["PYTHONPATH"] = str(Path(aiologging.__file__).resolve().parents[1])
     proc = subprocess.run(
         [
             sys.executable,
@@ -1264,14 +1216,9 @@ def _run_atexit_child(
     for line in proc.stdout.splitlines():
         if line.startswith("undelivered="):
             backlog = int(line.split("=", 1)[1])
-    text = (
-        log_path.read_text(encoding="utf-8")
-        if log_path.exists()
-        else ""
-    )
+    text = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
     seqs = [
-        int(match.group(1))
-        for match in re.finditer(r"record (\d+)", text)
+        int(match.group(1)) for match in re.finditer(r"record (\d+)", text)
     ]
     return proc, backlog, seqs
 

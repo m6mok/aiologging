@@ -18,8 +18,8 @@ from typing import Any, List, Optional
 import httpx
 import pytest
 
-import aiologging
-from aiologging import AsyncLoggerManager
+import aiologging.legacy as aiologging
+from aiologging.legacy import AsyncLoggerManager
 from aiologging.handlers import AsyncHandler, AsyncHttpJsonHandler
 from aiologging.logger import _drain_at_exit
 from aiologging.types import BatchConfig
@@ -255,7 +255,7 @@ class TestAtexitDrain:
     def test_basic_config_forwards_atexit_flush(self) -> None:
         aiologging.basicConfig(atexit_flush=0.5)
         try:
-            from aiologging import logger as logger_module
+            from aiologging.legacy import logger as logger_module
 
             assert logger_module._atexit_flush_timeout == 0.5
         finally:

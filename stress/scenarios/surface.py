@@ -41,7 +41,6 @@ from ..metrics import wait_until
 from ..runner import Context, Skip, scenario
 from ..sinks import CollectorHandler
 
-
 # ----------------------------------------------------------------------
 # Content integrity
 # ----------------------------------------------------------------------
@@ -73,9 +72,7 @@ async def payload_integrity(ctx: Context) -> None:
                 extra={"seq": seq, "producer": worker},
             )
 
-    await asyncio.gather(
-        *(produce_one(worker) for worker in range(producers))
-    )
+    await asyncio.gather(*(produce_one(worker) for worker in range(producers)))
 
     exc_count = ctx.n(200, 40)
     for seq in range(exc_count):
@@ -132,8 +129,7 @@ async def payload_integrity(ctx: Context) -> None:
     ctx.check(
         "every exc_info record carries its own traceback",
         len(got_errors) == exc_count and not bad_tracebacks,
-        f"errors={len(got_errors)}/{exc_count} "
-        f"bad={bad_tracebacks[:1]}",
+        f"errors={len(got_errors)}/{exc_count} " f"bad={bad_tracebacks[:1]}",
     )
 
 
@@ -160,9 +156,7 @@ async def stream_contention(ctx: Context) -> None:
         for seq in range(count):
             await logger.info("line-%d-%d", worker, seq)
 
-    await asyncio.gather(
-        *(produce_one(worker) for worker in range(producers))
-    )
+    await asyncio.gather(*(produce_one(worker) for worker in range(producers)))
     await manager.flush()
 
     lines = stream.getvalue().splitlines()
@@ -220,9 +214,7 @@ async def retry_exhaustion(ctx: Context) -> None:
 
     count = ctx.n(400, 80)
     for seq in range(count):
-        await logger.info(
-            "dead %d", seq, extra={"seq": seq, "producer": 0}
-        )
+        await logger.info("dead %d", seq, extra={"seq": seq, "producer": 0})
     await manager.flush()
 
     attempts_dead = sink.attempts
@@ -232,9 +224,7 @@ async def retry_exhaustion(ctx: Context) -> None:
     # the sink recovers: the pipeline must still deliver
     sink.fail_every = 0
     for seq in range(count):
-        await logger.info(
-            "alive %d", seq, extra={"seq": seq, "producer": 1}
-        )
+        await logger.info("alive %d", seq, extra={"seq": seq, "producer": 1})
     await manager.flush()
     alive = sink.by_producer.get(1, [])
 
@@ -249,8 +239,7 @@ async def retry_exhaustion(ctx: Context) -> None:
     ctx.check(
         "error_handler fired exactly once per dead record",
         len(errored) == count and len(set(errored)) == count,
-        f"reported={len(errored)} unique={len(set(errored))} "
-        f"sent={count}",
+        f"reported={len(errored)} unique={len(set(errored))} " f"sent={count}",
     )
     ctx.check(
         "every dead record exhausted its retries",
@@ -352,8 +341,8 @@ import asyncio
 import sys
 import threading
 
-import aiologging
-from aiologging.config import configure_from_dict, get_configured_logger
+import aiologging.legacy as aiologging
+from aiologging.legacy_config import configure_from_dict, get_configured_logger
 
 log_path = sys.argv[1]
 count = int(sys.argv[2])
@@ -429,17 +418,13 @@ def config_pipeline(ctx: Context) -> None:
         ctx, _CONFIG_CHILD, "config_child.py", "config.log", [str(count)]
     )
     unique_loggers = _child_int(proc.stdout, "unique_loggers")
-    text = (
-        out_path.read_text(encoding="utf-8") if out_path.exists() else ""
-    )
+    text = out_path.read_text(encoding="utf-8") if out_path.exists() else ""
     pairs = [
         (int(m.group(1)), int(m.group(2)))
         for m in re.finditer(r"cfg (\d+) (\d+)", text)
     ]
     expected = {
-        (worker, seq)
-        for worker in range(producers)
-        for seq in range(count)
+        (worker, seq) for worker in range(producers) for seq in range(count)
     }
     missing = expected - set(pairs)
     duplicates = len(pairs) - len(set(pairs))
@@ -484,7 +469,7 @@ import asyncio
 import logging
 import sys
 
-import aiologging
+import aiologging.legacy as aiologging
 
 log_path = sys.argv[1]
 count = int(sys.argv[2])
@@ -570,9 +555,7 @@ def capture_stdlib_global(ctx: Context) -> None:
     )
     bridges = _child_int(proc.stdout, "bridges")
     left = _child_int(proc.stdout, "left")
-    text = (
-        out_path.read_text(encoding="utf-8") if out_path.exists() else ""
-    )
+    text = out_path.read_text(encoding="utf-8") if out_path.exists() else ""
     cold = re.findall(r"cold (\d+)", text)
     gap = re.findall(r"gap (\d+)", text)
     threaded = re.findall(r"t(\d+) (\d+)", text)
@@ -608,8 +591,7 @@ def capture_stdlib_global(ctx: Context) -> None:
     )
     ctx.check(
         "every thread record came through the global bridge",
-        not missing_threaded
-        and len(threaded) == len(expected_threaded),
+        not missing_threaded and len(threaded) == len(expected_threaded),
         f"missing={len(missing_threaded)} "
         f"extra={len(threaded) - len(expected_threaded)}",
     )
@@ -638,15 +620,13 @@ def _run_child(
     args: List[str],
 ) -> Tuple["subprocess.CompletedProcess[str]", Path]:
     """Run a child interpreter script against a tmpdir output file."""
-    import aiologging
+    import aiologging.legacy as aiologging
 
     script = ctx.tmpdir / script_name
     script.write_text(source, encoding="utf-8")
     out_path = ctx.tmpdir / output_name
     env = dict(os.environ)
-    env["PYTHONPATH"] = str(
-        Path(aiologging.__file__).resolve().parents[1]
-    )
+    env["PYTHONPATH"] = str(Path(aiologging.__file__).resolve().parents[1])
     proc = subprocess.run(
         [sys.executable, str(script), str(out_path), *args],
         capture_output=True,

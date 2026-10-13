@@ -21,8 +21,8 @@ from typing import Any, Callable, Dict, List, Optional
 import httpx
 import pytest
 
-import aiologging
-from aiologging import AsyncTelegramHandler, captureStdlib
+import aiologging.legacy as aiologging
+from aiologging.legacy import AsyncTelegramHandler, captureStdlib
 from aiologging.bridge import _TokenBucket, StdlibBridgeHandler
 from aiologging.logger import _IN_CONSUMER, _INLINE_HANDLED_ATTR
 from aiologging.types import BatchConfig
@@ -333,7 +333,7 @@ class TestBridgeInline:
         assert getattr(record, _INLINE_HANDLED_ATTR) == {handler}
 
     def test_capture_stdlib_replaces_the_bridge(self) -> None:
-        from aiologging import bridge as bridge_module
+        from aiologging.legacy import bridge as bridge_module
 
         captureStdlib(True)
         first = bridge_module._bridge_handler
@@ -353,11 +353,9 @@ class TestBridgeInline:
         assert bridges == [second]
 
     def test_basic_config_forwards_inline_level(self) -> None:
-        from aiologging import bridge as bridge_module
+        from aiologging.legacy import bridge as bridge_module
 
-        aiologging.basicConfig(
-            capture_stdlib=True, inline_level=logging.ERROR
-        )
+        aiologging.basicConfig(capture_stdlib=True, inline_level=logging.ERROR)
         bridge = bridge_module._bridge_handler
         assert bridge is not None
         assert bridge._inline_level == logging.ERROR

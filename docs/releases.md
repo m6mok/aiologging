@@ -42,7 +42,7 @@ Uniform for every release (enforced by `make release`):
 ## Pipeline
 
 - **CI** (`.github/workflows/ci.yml`) runs on every push/PR to
-  `master`/`main`/`develop`: flake8 + mypy + pytest (3.9–3.14),
+  `master`/`main`/`develop`: flake8 + mypy + pytest (3.11–3.15),
   all examples, package build with `twine check`.
 - **Release** (`.github/workflows/release.yml`) publishes to PyPI
   when a **GitHub Release is published** (or via manual

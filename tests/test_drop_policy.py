@@ -20,8 +20,8 @@ import logging
 
 import pytest
 
-import aiologging
-from aiologging import AsyncLoggerManager, LevelAwareDrop
+import aiologging.legacy as aiologging
+from aiologging.legacy import AsyncLoggerManager, LevelAwareDrop
 from aiologging.logger import AsyncLogger
 
 from .test_logger import BlockingHandler, RecordingHandler
@@ -64,12 +64,8 @@ class TestLevelAwareDrop:
 
     def test_watermark_gates_the_shedding(self) -> None:
         policy = LevelAwareDrop(watermark=0.5)
-        info = logging.LogRecord(
-            "x", logging.INFO, "f", 1, "m", None, None
-        )
-        error = logging.LogRecord(
-            "x", logging.ERROR, "f", 1, "m", None, None
-        )
+        info = logging.LogRecord("x", logging.INFO, "f", 1, "m", None, None)
+        error = logging.LogRecord("x", logging.ERROR, "f", 1, "m", None, None)
         assert not policy.should_discard_arriving(info, 4, 10)
         assert policy.should_discard_arriving(info, 5, 10)
         assert not policy.should_discard_arriving(error, 10, 10)

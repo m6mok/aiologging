@@ -11,8 +11,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-import aiologging
-from aiologging.config import (
+import aiologging.legacy as aiologging
+from aiologging.legacy_config import (
     ConfigManager,
     get_config_manager,
     configure_from_file,
@@ -129,18 +129,8 @@ class TestConfigManager:
 
         config = {
             "version": 1,
-            "loggers": {
-                "test": {
-                    "level": "INFO",
-                    "handlers": ["console"]
-                }
-            },
-            "handlers": {
-                "console": {
-                    "class": "stream",
-                    "stream": "stdout"
-                }
-            }
+            "loggers": {"test": {"level": "INFO", "handlers": ["console"]}},
+            "handlers": {"console": {"class": "stream", "stream": "stdout"}},
         }
 
         manager.load_from_dict(config)
@@ -150,11 +140,7 @@ class TestConfigManager:
         """Test loading configuration with invalid version."""
         manager = ConfigManager()
 
-        config = {
-            "version": 2,
-            "loggers": {},
-            "handlers": {}
-        }
+        config = {"version": 2, "loggers": {}, "handlers": {}}
 
         with pytest.raises(ConfigurationError):
             manager.load_from_dict(config)
@@ -163,10 +149,7 @@ class TestConfigManager:
         """Test loading configuration without version."""
         manager = ConfigManager()
 
-        config = {
-            "loggers": {},
-            "handlers": {}
-        }
+        config = {"loggers": {}, "handlers": {}}
 
         with pytest.raises(ConfigurationError):
             manager.load_from_dict(config)
@@ -175,10 +158,7 @@ class TestConfigManager:
         """Test loading configuration without loggers."""
         manager = ConfigManager()
 
-        config = {
-            "version": 1,
-            "handlers": {}
-        }
+        config = {"version": 1, "handlers": {}}
 
         with pytest.raises(ConfigurationError):
             manager.load_from_dict(config)
@@ -187,10 +167,7 @@ class TestConfigManager:
         """Test loading configuration without handlers."""
         manager = ConfigManager()
 
-        config = {
-            "version": 1,
-            "loggers": {}
-        }
+        config = {"version": 1, "loggers": {}}
 
         with pytest.raises(ConfigurationError):
             manager.load_from_dict(config)
@@ -201,21 +178,13 @@ class TestConfigManager:
 
         config = {
             "version": 1,
-            "loggers": {
-                "test": {
-                    "level": "INFO",
-                    "handlers": ["console"]
-                }
-            },
-            "handlers": {
-                "console": {
-                    "class": "stream",
-                    "stream": "stdout"
-                }
-            }
+            "loggers": {"test": {"level": "INFO", "handlers": ["console"]}},
+            "handlers": {"console": {"class": "stream", "stream": "stdout"}},
         }
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
             json.dump(config, f)
             temp_file = f.name
 
@@ -236,7 +205,9 @@ class TestConfigManager:
         """Test loading configuration from a file with invalid JSON."""
         manager = ConfigManager()
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
             f.write("{ invalid json }")
             temp_file = f.name
 
@@ -250,7 +221,9 @@ class TestConfigManager:
         """Test loading configuration from a file with unsupported format."""
         manager = ConfigManager()
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False
+        ) as f:
             f.write("some text")
             temp_file = f.name
 
@@ -290,18 +263,8 @@ class TestConfigManager:
 
         config = {
             "version": 1,
-            "loggers": {
-                "test": {
-                    "level": "INFO",
-                    "handlers": ["console"]
-                }
-            },
-            "handlers": {
-                "console": {
-                    "class": "stream",
-                    "stream": "stdout"
-                }
-            }
+            "loggers": {"test": {"level": "INFO", "handlers": ["console"]}},
+            "handlers": {"console": {"class": "stream", "stream": "stdout"}},
         }
 
         manager.load_from_dict(config)
@@ -316,11 +279,7 @@ class TestConfigManager:
         """Test getting a logger that is not configured."""
         manager = ConfigManager()
 
-        config = {
-            "version": 1,
-            "loggers": {},
-            "handlers": {}
-        }
+        config = {"version": 1, "loggers": {}, "handlers": {}}
 
         manager.load_from_dict(config)
 
@@ -340,18 +299,8 @@ class TestConfigManager:
 
         config = {
             "version": 1,
-            "loggers": {
-                "test": {
-                    "level": "INFO",
-                    "handlers": ["console"]
-                }
-            },
-            "handlers": {
-                "console": {
-                    "class": "stream",
-                    "stream": "stdout"
-                }
-            }
+            "loggers": {"test": {"level": "INFO", "handlers": ["console"]}},
+            "handlers": {"console": {"class": "stream", "stream": "stdout"}},
         }
 
         manager.load_from_dict(config)
@@ -385,9 +334,7 @@ class TestConfigManager:
             barrier.wait()
             seen.append(manager.get_logger("test"))
 
-        threads = [
-            threading.Thread(target=race) for _ in range(racers)
-        ]
+        threads = [threading.Thread(target=race) for _ in range(racers)]
         for thread in threads:
             thread.start()
         for thread in threads:
@@ -435,16 +382,16 @@ class TestConfigManager:
         manager = ConfigManager()
 
         assert manager._parse_env_value("simple string") == "simple string"
-        assert manager._parse_env_value("{ not valid json }") == "{ not valid json }"
+        assert (
+            manager._parse_env_value("{ not valid json }")
+            == "{ not valid json }"
+        )
 
     def test_create_stream_handler(self) -> None:
         """Test creating a stream handler."""
         manager = ConfigManager()
 
-        config = {
-            "class": "stream",
-            "stream": "stdout"
-        }
+        config = {"class": "stream", "stream": "stdout"}
 
         handler = manager._create_stream_handler(config, logging.INFO)
 
@@ -463,7 +410,7 @@ class TestConfigManager:
                 "class": "file",
                 "filename": filename,
                 "mode": "w",
-                "encoding": "utf-8"
+                "encoding": "utf-8",
             }
 
             handler = manager._create_file_handler(config, logging.DEBUG)
@@ -480,9 +427,7 @@ class TestConfigManager:
         """Test creating a file handler without a filename."""
         manager = ConfigManager()
 
-        config = {
-            "class": "file"
-        }
+        config = {"class": "file"}
 
         with pytest.raises(ConfigurationError):
             manager._create_file_handler(config, logging.DEBUG)
@@ -491,9 +436,7 @@ class TestConfigManager:
         """Test creating a handler with an unknown class."""
         manager = ConfigManager()
 
-        config = {
-            "class": "unknown"
-        }
+        manager._config["handlers"] = {"test": {"class": "unknown"}}
 
         with pytest.raises(ConfigurationError):
             manager._create_handler("test")
@@ -502,7 +445,7 @@ class TestConfigManager:
         """Test creating a handler without specifying a class."""
         manager = ConfigManager()
 
-        config = {}
+        manager._config["handlers"] = {"test": {"level": "INFO"}}
 
         with pytest.raises(ConfigurationError):
             manager._create_handler("test")
@@ -524,10 +467,10 @@ class TestConfigManager:
             "method": "POST",
             "headers": {"Content-Type": "application/json"},
             "timeout": 60.0,
-            "verify_ssl": False
+            "verify_ssl": False,
         }
 
-        with patch('aiologging.handlers.http.aiohttp') as mock_aiohttp:
+        with patch("aiologging.handlers.http.aiohttp"):
             handler = manager._create_http_handler(config, logging.INFO)
 
             assert handler is not None
@@ -540,11 +483,11 @@ class TestConfigManager:
         """Test creating an HTTP handler without a URL."""
         manager = ConfigManager()
 
-        config = {
-            "class": "http"
-        }
+        config = {"class": "http"}
 
-        with pytest.raises(ConfigurationError, match="HTTP handler must specify a URL"):
+        with pytest.raises(
+            ConfigurationError, match="HTTP handler must specify a URL"
+        ):
             manager._create_http_handler(config, logging.INFO)
 
     def test_create_http_json_handler(self) -> None:
@@ -556,11 +499,13 @@ class TestConfigManager:
             "url": "https://example.com/log",
             "method": "PUT",
             "params": {"api_key": "secret"},
-            "timeout": 45.0
+            "timeout": 45.0,
         }
 
-        with patch('aiologging.handlers.http.aiohttp') as mock_aiohttp:
-            handler = manager._create_http_json_handler(config, logging.WARNING)
+        with patch("aiologging.handlers.http.aiohttp"):
+            handler = manager._create_http_json_handler(
+                config, logging.WARNING
+            )
 
             assert handler is not None
             assert handler.url == "https://example.com/log"
@@ -571,11 +516,11 @@ class TestConfigManager:
         """Test creating an HTTP JSON handler without a URL."""
         manager = ConfigManager()
 
-        config = {
-            "class": "http_json"
-        }
+        config = {"class": "http_json"}
 
-        with pytest.raises(ConfigurationError, match="HTTP JSON handler must specify a URL"):
+        with pytest.raises(
+            ConfigurationError, match="HTTP JSON handler must specify a URL"
+        ):
             manager._create_http_json_handler(config, logging.INFO)
 
     def test_create_rotating_file_handler(self) -> None:
@@ -592,10 +537,12 @@ class TestConfigManager:
                 "mode": "a",
                 "encoding": "utf-8",
                 "max_bytes": 1024,
-                "backup_count": 5
+                "backup_count": 5,
             }
 
-            handler = manager._create_rotating_file_handler(config, logging.DEBUG)
+            handler = manager._create_rotating_file_handler(
+                config, logging.DEBUG
+            )
 
             assert handler is not None
             assert handler.filename == Path(filename)
@@ -610,11 +557,12 @@ class TestConfigManager:
         """Test creating a rotating file handler without a filename."""
         manager = ConfigManager()
 
-        config = {
-            "class": "rotating_file"
-        }
+        config = {"class": "rotating_file"}
 
-        with pytest.raises(ConfigurationError, match="Rotating file handler must specify a filename"):
+        with pytest.raises(
+            ConfigurationError,
+            match="Rotating file handler must specify a filename",
+        ):
             manager._create_rotating_file_handler(config, logging.DEBUG)
 
     def test_create_timed_rotating_file_handler(self) -> None:
@@ -631,10 +579,12 @@ class TestConfigManager:
                 "encoding": "utf-8",
                 "when": "D",
                 "interval": 7,
-                "backup_count": 4
+                "backup_count": 4,
             }
 
-            handler = manager._create_timed_rotating_file_handler(config, logging.INFO)
+            handler = manager._create_timed_rotating_file_handler(
+                config, logging.INFO
+            )
 
             assert handler is not None
             assert handler.filename == Path(filename)
@@ -649,11 +599,12 @@ class TestConfigManager:
         """Test creating a timed rotating file handler without a filename."""
         manager = ConfigManager()
 
-        config = {
-            "class": "timed_rotating_file"
-        }
+        config = {"class": "timed_rotating_file"}
 
-        with pytest.raises(ConfigurationError, match="Timed rotating file handler must specify a filename"):
+        with pytest.raises(
+            ConfigurationError,
+            match="Timed rotating file handler must specify a filename",
+        ):
             manager._create_timed_rotating_file_handler(config, logging.INFO)
 
     def test_parse_env_value_invalid_json(self) -> None:
@@ -661,7 +612,9 @@ class TestConfigManager:
         manager = ConfigManager()
 
         # This is invalid JSON but should be returned as string
-        assert manager._parse_env_value("{ invalid json }") == "{ invalid json }"
+        assert (
+            manager._parse_env_value("{ invalid json }") == "{ invalid json }"
+        )
 
     def test_parse_env_value_complex_json(self) -> None:
         """Test parsing complex JSON values from environment variables."""
@@ -694,23 +647,22 @@ class TestCustomHandlerClasses:
         """Build a minimal config with a single handler."""
         return {
             "version": 1,
-            "loggers": {
-                "test": {
-                    "level": "INFO",
-                    "handlers": ["custom"]
-                }
-            },
-            "handlers": {"custom": handler}
+            "loggers": {"test": {"level": "INFO", "handlers": ["custom"]}},
+            "handlers": {"custom": handler},
         }
 
     def test_dotted_path_handler(self) -> None:
         """Test creating a handler from a dotted path."""
         manager = ConfigManager()
-        manager.load_from_dict(self._config_for({
-            "class": "tests.test_config.DottedPathHandler",
-            "level": "WARNING",
-            "tag": "from-config"
-        }))
+        manager.load_from_dict(
+            self._config_for(
+                {
+                    "class": "tests.test_config.DottedPathHandler",
+                    "level": "WARNING",
+                    "tag": "from-config",
+                }
+            )
+        )
 
         logger = manager.get_logger("test")
 
@@ -723,10 +675,14 @@ class TestCustomHandlerClasses:
     def test_dotted_path_builtin_class(self) -> None:
         """Test that a dotted path to a bundled handler works."""
         manager = ConfigManager()
-        manager.load_from_dict(self._config_for({
-            "class": "aiologging.handlers.stream.AsyncStreamHandler",
-            "level": "INFO"
-        }))
+        manager.load_from_dict(
+            self._config_for(
+                {
+                    "class": "aiologging.handlers.stream.AsyncStreamHandler",
+                    "level": "INFO",
+                }
+            )
+        )
 
         logger = manager.get_logger("test")
 
@@ -736,11 +692,11 @@ class TestCustomHandlerClasses:
         """Test that a handler registered by name is constructed."""
         manager = ConfigManager()
         manager.register_handler("dotted", DottedPathHandler)
-        manager.load_from_dict(self._config_for({
-            "class": "dotted",
-            "level": "DEBUG",
-            "tag": "registered"
-        }))
+        manager.load_from_dict(
+            self._config_for(
+                {"class": "dotted", "level": "DEBUG", "tag": "registered"}
+            )
+        )
 
         logger = manager.get_logger("test")
 
@@ -751,9 +707,9 @@ class TestCustomHandlerClasses:
     def test_dotted_path_module_not_found(self) -> None:
         """Test a dotted path pointing to a missing module."""
         manager = ConfigManager()
-        manager.load_from_dict(self._config_for({
-            "class": "no.such.module.Handler"
-        }))
+        manager.load_from_dict(
+            self._config_for({"class": "no.such.module.Handler"})
+        )
 
         with pytest.raises(
             ConfigurationError, match="Cannot import handler class"
@@ -763,21 +719,17 @@ class TestCustomHandlerClasses:
     def test_dotted_path_missing_attribute(self) -> None:
         """Test a dotted path pointing to a missing class."""
         manager = ConfigManager()
-        manager.load_from_dict(self._config_for({
-            "class": "tests.test_config.NoSuchHandler"
-        }))
+        manager.load_from_dict(
+            self._config_for({"class": "tests.test_config.NoSuchHandler"})
+        )
 
-        with pytest.raises(
-            ConfigurationError, match="has no attribute"
-        ):
+        with pytest.raises(ConfigurationError, match="has no attribute"):
             manager.get_logger("test")
 
     def test_dotted_path_not_a_handler(self) -> None:
         """Test a dotted path pointing to a non-handler class."""
         manager = ConfigManager()
-        manager.load_from_dict(self._config_for({
-            "class": "json.JSONDecoder"
-        }))
+        manager.load_from_dict(self._config_for({"class": "json.JSONDecoder"}))
 
         with pytest.raises(
             ConfigurationError, match="not an AsyncHandler subclass"
@@ -787,14 +739,16 @@ class TestCustomHandlerClasses:
     def test_custom_handler_bad_kwargs(self) -> None:
         """Test that unexpected constructor kwargs raise an error."""
         manager = ConfigManager()
-        manager.load_from_dict(self._config_for({
-            "class": "tests.test_config.DottedPathHandler",
-            "unexpected_option": 42
-        }))
+        manager.load_from_dict(
+            self._config_for(
+                {
+                    "class": "tests.test_config.DottedPathHandler",
+                    "unexpected_option": 42,
+                }
+            )
+        )
 
-        with pytest.raises(
-            ConfigurationError, match="Cannot create handler"
-        ):
+        with pytest.raises(ConfigurationError, match="Cannot create handler"):
             manager.get_logger("test")
 
 
@@ -802,9 +756,7 @@ class TestGlobalHierarchyIntegration:
     """Config loggers must live in the global aiologging hierarchy."""
 
     @staticmethod
-    def _config(
-        name: str, handler: dict, **logger_extra: Any
-    ) -> dict:
+    def _config(name: str, handler: dict, **logger_extra: Any) -> dict:
         return {
             "version": 1,
             "loggers": {
@@ -820,9 +772,9 @@ class TestGlobalHierarchyIntegration:
     def test_logger_registered_in_global_hierarchy(self) -> None:
         """The config logger has a parent and is in loggerDict."""
         manager = ConfigManager()
-        manager.load_from_dict(self._config(
-            "cfgapp.sub", {"class": "stream", "stream": "stderr"}
-        ))
+        manager.load_from_dict(
+            self._config("cfgapp.sub", {"class": "stream", "stream": "stderr"})
+        )
 
         logger = manager.get_logger("cfgapp.sub")
 
@@ -835,11 +787,13 @@ class TestGlobalHierarchyIntegration:
         """A logger obtained earlier via getLogger gets the config."""
         early = aiologging.getLogger("cfgearly")
         manager = ConfigManager()
-        manager.load_from_dict(self._config(
-            "cfgearly",
-            {"class": "stream", "stream": "stderr"},
-            propagate=False,
-        ))
+        manager.load_from_dict(
+            self._config(
+                "cfgearly",
+                {"class": "stream", "stream": "stderr"},
+                propagate=False,
+            )
+        )
 
         configured = manager.get_logger("cfgearly")
 
@@ -855,27 +809,29 @@ class TestGlobalHierarchyIntegration:
         aiologging.getLogger().addHandler(collector)
 
         manager = ConfigManager()
-        manager.load_from_dict(self._config(
-            "cfgprop", {"class": "stream", "stream": "stderr"}
-        ))
+        manager.load_from_dict(
+            self._config("cfgprop", {"class": "stream", "stream": "stderr"})
+        )
         logger = manager.get_logger("cfgprop")
 
         await logger.info("propagated to root")
         await aiologging.flush()
 
-        assert [
-            record.getMessage() for record in collector.records
-        ] == ["propagated to root"]
+        assert [record.getMessage() for record in collector.records] == [
+            "propagated to root"
+        ]
 
     @pytest.mark.asyncio
     async def test_buffered_handler_flushed_on_shutdown(self) -> None:
         """shutdown() force-flushes a config logger's buffered tail."""
         manager = ConfigManager()
-        manager.load_from_dict(self._config(
-            "cfgbuf",
-            {"class": "tests.test_config.BufferedCollectorHandler"},
-            propagate=False,
-        ))
+        manager.load_from_dict(
+            self._config(
+                "cfgbuf",
+                {"class": "tests.test_config.BufferedCollectorHandler"},
+                propagate=False,
+            )
+        )
         logger = manager.get_logger("cfgbuf")
         handler = BufferedCollectorHandler.last_instance
         assert handler is not None
@@ -884,17 +840,17 @@ class TestGlobalHierarchyIntegration:
         # The under-filled buffer holds the record until shutdown's
         # drain force-flushes every handler in the hierarchy
         await aiologging.shutdown()
-        assert [
-            record.getMessage() for record in handler.flushed
-        ] == ["buffered tail"]
+        assert [record.getMessage() for record in handler.flushed] == [
+            "buffered tail"
+        ]
 
     @pytest.mark.asyncio
     async def test_stale_cache_rebuilt_after_shutdown(self) -> None:
         """After a global shutdown the manager rebuilds the logger."""
         manager = ConfigManager()
-        manager.load_from_dict(self._config(
-            "cfgcache", {"class": "stream", "stream": "stderr"}
-        ))
+        manager.load_from_dict(
+            self._config("cfgcache", {"class": "stream", "stream": "stderr"})
+        )
         before = manager.get_logger("cfgcache")
         await aiologging.shutdown()
 
@@ -915,9 +871,7 @@ class TestFormattersSection:
         return {
             "version": 1,
             "formatters": formatters,
-            "loggers": {
-                "fmtapp": {"level": "INFO", "handlers": ["h"]}
-            },
+            "loggers": {"fmtapp": {"level": "INFO", "handlers": ["h"]}},
             "handlers": {
                 "h": {
                     "class": "stream",
@@ -930,13 +884,17 @@ class TestFormattersSection:
     def test_formatter_applied_to_handler(self) -> None:
         """format and datefmt reach the handler's formatter."""
         manager = ConfigManager()
-        manager.load_from_dict(self._config(
-            {"plain": {
-                "format": "%(levelname)s :: %(message)s",
-                "datefmt": "%Y",
-            }},
-            {"formatter": "plain"},
-        ))
+        manager.load_from_dict(
+            self._config(
+                {
+                    "plain": {
+                        "format": "%(levelname)s :: %(message)s",
+                        "datefmt": "%Y",
+                    }
+                },
+                {"formatter": "plain"},
+            )
+        )
 
         logger = manager.get_logger("fmtapp")
         formatter = logger.handlers[0].formatter
@@ -969,26 +927,30 @@ class TestFormattersSection:
     def test_formatter_class_dotted_path(self) -> None:
         """class resolves a dotted path like TelegramHtmlFormatter."""
         manager = ConfigManager()
-        manager.load_from_dict(self._config(
-            {"tg": {
-                "class": "aiologging.formatters.TelegramHtmlFormatter"
-            }},
-            {"formatter": "tg"},
-        ))
+        manager.load_from_dict(
+            self._config(
+                {
+                    "tg": {
+                        "class": "aiologging.formatters.TelegramHtmlFormatter"
+                    }
+                },
+                {"formatter": "tg"},
+            )
+        )
 
         logger = manager.get_logger("fmtapp")
 
-        assert isinstance(
-            logger.handlers[0].formatter, TelegramHtmlFormatter
-        )
+        assert isinstance(logger.handlers[0].formatter, TelegramHtmlFormatter)
 
     def test_formatter_class_not_importable(self) -> None:
         """A missing formatter module raises ConfigurationError."""
         manager = ConfigManager()
-        manager.load_from_dict(self._config(
-            {"bad": {"class": "no.such.module.Formatter"}},
-            {"formatter": "bad"},
-        ))
+        manager.load_from_dict(
+            self._config(
+                {"bad": {"class": "no.such.module.Formatter"}},
+                {"formatter": "bad"},
+            )
+        )
         with pytest.raises(
             ConfigurationError, match="Cannot import formatter class"
         ):
@@ -997,35 +959,33 @@ class TestFormattersSection:
     def test_formatter_class_not_a_formatter(self) -> None:
         """A class without the formatter methods is rejected."""
         manager = ConfigManager()
-        manager.load_from_dict(self._config(
-            {"bad": {"class": "tests.test_config.NotAFormatter"}},
-            {"formatter": "bad"},
-        ))
-        with pytest.raises(
-            ConfigurationError, match="FormatterProtocol"
-        ):
+        manager.load_from_dict(
+            self._config(
+                {"bad": {"class": "tests.test_config.NotAFormatter"}},
+                {"formatter": "bad"},
+            )
+        )
+        with pytest.raises(ConfigurationError, match="FormatterProtocol"):
             manager.get_logger("fmtapp")
 
     def test_unknown_formatter_reference_rejected(self) -> None:
         """A handler referencing a missing formatter fails at load."""
         manager = ConfigManager()
-        with pytest.raises(
-            ConfigurationError, match="unknown formatter"
-        ):
-            manager.load_from_dict(self._config(
-                {}, {"formatter": "nope"}
-            ))
+        with pytest.raises(ConfigurationError, match="unknown formatter"):
+            manager.load_from_dict(self._config({}, {"formatter": "nope"}))
 
     def test_custom_handler_gets_formatter_not_kwarg(self) -> None:
         """For custom classes 'formatter' is a reference, not a kwarg."""
         manager = ConfigManager()
-        manager.load_from_dict(self._config(
-            {"plain": {"format": "%(message)s"}},
-            {
-                "class": "tests.test_config.DottedPathHandler",
-                "formatter": "plain",
-            },
-        ))
+        manager.load_from_dict(
+            self._config(
+                {"plain": {"format": "%(message)s"}},
+                {
+                    "class": "tests.test_config.DottedPathHandler",
+                    "formatter": "plain",
+                },
+            )
+        )
 
         logger = manager.get_logger("fmtapp")
         handler = logger.handlers[0]
@@ -1041,9 +1001,7 @@ class TestStreamTargetKey:
     def _handler_config(target: str) -> dict:
         return {
             "version": 1,
-            "loggers": {
-                "streamapp": {"level": "INFO", "handlers": ["h"]}
-            },
+            "loggers": {"streamapp": {"level": "INFO", "handlers": ["h"]}},
             "handlers": {"h": {"class": "stream", "stream": target}},
         }
 
@@ -1056,9 +1014,7 @@ class TestStreamTargetKey:
             ("ext://sys.stderr", "stderr"),
         ],
     )
-    def test_stream_target_resolved(
-        self, target: str, expected: str
-    ) -> None:
+    def test_stream_target_resolved(self, target: str, expected: str) -> None:
         """stdout/stderr and their ext:// aliases are honoured."""
         manager = ConfigManager()
         manager.load_from_dict(self._handler_config(target))
@@ -1082,9 +1038,7 @@ class TestStreamTargetKey:
         """An unknown stream target raises ConfigurationError."""
         manager = ConfigManager()
         manager.load_from_dict(self._handler_config("ext://sys.foo"))
-        with pytest.raises(
-            ConfigurationError, match="Unsupported stream"
-        ):
+        with pytest.raises(ConfigurationError, match="Unsupported stream"):
             manager.get_logger("streamapp")
 
 
@@ -1095,9 +1049,7 @@ class TestStrictConfigKeys:
     def _base_config() -> dict:
         return {
             "version": 1,
-            "loggers": {
-                "strictapp": {"level": "INFO", "handlers": ["h"]}
-            },
+            "loggers": {"strictapp": {"level": "INFO", "handlers": ["h"]}},
             "handlers": {"h": {"class": "stream", "stream": "stderr"}},
         }
 
@@ -1114,27 +1066,21 @@ class TestStrictConfigKeys:
         manager = ConfigManager()
         config = self._base_config()
         config["loggers"]["strictapp"]["propogate"] = False
-        with pytest.raises(
-            ConfigurationError, match="Unknown key.*propogate"
-        ):
+        with pytest.raises(ConfigurationError, match="Unknown key.*propogate"):
             manager.load_from_dict(config)
 
     def test_unknown_builtin_handler_key_rejected(self) -> None:
         manager = ConfigManager()
         config = self._base_config()
         config["handlers"]["h"]["formater"] = "plain"
-        with pytest.raises(
-            ConfigurationError, match="Unknown key.*formater"
-        ):
+        with pytest.raises(ConfigurationError, match="Unknown key.*formater"):
             manager.load_from_dict(config)
 
     def test_unknown_formatter_key_rejected(self) -> None:
         manager = ConfigManager()
         config = self._base_config()
         config["formatters"] = {"plain": {"fmt": "%(message)s"}}
-        with pytest.raises(
-            ConfigurationError, match="Unknown key.*fmt"
-        ):
+        with pytest.raises(ConfigurationError, match="Unknown key.*fmt"):
             manager.load_from_dict(config)
 
     def test_custom_handler_keys_stay_free_form(self) -> None:
@@ -1164,21 +1110,13 @@ class TestGlobalFunctions:
         """Test configuring from a file using the global function."""
         config = {
             "version": 1,
-            "loggers": {
-                "test": {
-                    "level": "INFO",
-                    "handlers": ["console"]
-                }
-            },
-            "handlers": {
-                "console": {
-                    "class": "stream",
-                    "stream": "stdout"
-                }
-            }
+            "loggers": {"test": {"level": "INFO", "handlers": ["console"]}},
+            "handlers": {"console": {"class": "stream", "stream": "stdout"}},
         }
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
             json.dump(config, f)
             temp_file = f.name
 
@@ -1194,18 +1132,8 @@ class TestGlobalFunctions:
         """Test configuring from a dictionary using the global function."""
         config = {
             "version": 1,
-            "loggers": {
-                "test": {
-                    "level": "INFO",
-                    "handlers": ["console"]
-                }
-            },
-            "handlers": {
-                "console": {
-                    "class": "stream",
-                    "stream": "stdout"
-                }
-            }
+            "loggers": {"test": {"level": "INFO", "handlers": ["console"]}},
+            "handlers": {"console": {"class": "stream", "stream": "stdout"}},
         }
 
         configure_from_dict(config)
@@ -1239,18 +1167,8 @@ class TestGlobalFunctions:
         """Test getting a configured logger using the global function."""
         config = {
             "version": 1,
-            "loggers": {
-                "test": {
-                    "level": "INFO",
-                    "handlers": ["console"]
-                }
-            },
-            "handlers": {
-                "console": {
-                    "class": "stream",
-                    "stream": "stdout"
-                }
-            }
+            "loggers": {"test": {"level": "INFO", "handlers": ["console"]}},
+            "handlers": {"console": {"class": "stream", "stream": "stdout"}},
         }
 
         configure_from_dict(config)

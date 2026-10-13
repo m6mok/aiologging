@@ -19,7 +19,7 @@ from typing import List, Optional
 import httpx
 import pytest
 
-from aiologging import AsyncLoggerManager
+from aiologging.legacy import AsyncLoggerManager
 from aiologging.types import BatchConfig
 from aiologging.handlers import AsyncFileHandler, AsyncHttpJsonHandler
 from aiologging.utils import LazyLock
@@ -112,9 +112,7 @@ class TestHttpSessionAffinity:
             backend="httpx",
             batch_config=BatchConfig(flush_interval=3600.0),
         )
-        injected = httpx.AsyncClient(
-            transport=httpx.MockTransport(respond)
-        )
+        injected = httpx.AsyncClient(transport=httpx.MockTransport(respond))
         handler._session = injected
 
         async def emit_and_flush(message: str) -> None:

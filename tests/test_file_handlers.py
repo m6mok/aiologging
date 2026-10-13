@@ -48,7 +48,7 @@ class TestAsyncFileHandler:
                 mode="w",
                 encoding="ascii",
                 delay=True,
-                errors="ignore"
+                errors="ignore",
             )
             assert handler.filename == Path(filename)
             assert handler.mode == "w"
@@ -64,7 +64,9 @@ class TestAsyncFileHandler:
         temp_file.close()
         return temp_file.name
 
-    def _assert_default_handler_properties(self, handler: AsyncFileHandler, filename: Path) -> None:
+    def _assert_default_handler_properties(
+        self, handler: AsyncFileHandler, filename: Path
+    ) -> None:
         """Assert default handler properties."""
         assert handler.filename == filename
         assert handler.mode == "a"
@@ -73,11 +75,18 @@ class TestAsyncFileHandler:
         assert handler._file is None
         assert handler._closed is False
 
-    def _create_test_record(self, message: str = "Test message", level: int = logging.INFO) -> logging.LogRecord:
+    def _create_test_record(
+        self, message: str = "Test message", level: int = logging.INFO
+    ) -> logging.LogRecord:
         """Create a test log record."""
         return logging.LogRecord(
-            name="test", level=level, pathname="", lineno=0,
-            msg=message, args=(), exc_info=None
+            name="test",
+            level=level,
+            pathname="",
+            lineno=0,
+            msg=message,
+            args=(),
+            exc_info=None,
         )
 
     @pytest.mark.asyncio
@@ -155,8 +164,13 @@ class TestAsyncFileHandler:
                 raise ValueError("Test exception")
             except ValueError:
                 record = logging.LogRecord(
-                    name="test", level=logging.ERROR, pathname="", lineno=0,
-                    msg="Error message", args=(), exc_info=True
+                    name="test",
+                    level=logging.ERROR,
+                    pathname="",
+                    lineno=0,
+                    msg="Error message",
+                    args=(),
+                    exc_info=True,
                 )
 
                 await handler.emit(record)
@@ -204,7 +218,9 @@ class TestAsyncFileHandler:
             record = self._create_test_record()
 
             with pytest.raises(HandlerError):
-                await handler.handle(record)  # Use handle instead of emit to check _closed
+                await handler.handle(
+                    record
+                )  # Use handle instead of emit to check _closed
         finally:
             os.unlink(filename)
 
@@ -267,9 +283,9 @@ class TestAsyncFileHandler:
             os.unlink(filename)
 
     @pytest.mark.asyncio
-    async def test_file_not_exists_delay_false(self) -> None:
+    async def test_file_not_exists_delay_false(self, tmp_path: Path) -> None:
         """Test handler with non-existent file and delay=False."""
-        filename = "/tmp/non_existent_file.log"
+        filename = str(tmp_path / "non_existent_file.log")
 
         # Make sure the file doesn't exist
         if os.path.exists(filename):
@@ -303,9 +319,9 @@ class TestAsyncFileHandler:
                 os.unlink(filename)
 
     @pytest.mark.asyncio
-    async def test_file_not_exists_delay_true(self) -> None:
+    async def test_file_not_exists_delay_true(self, tmp_path: Path) -> None:
         """Test handler with non-existent file and delay=True."""
-        filename = "/tmp/non_existent_file.log"
+        filename = str(tmp_path / "non_existent_file.log")
 
         # Make sure the file doesn't exist
         if os.path.exists(filename):
@@ -338,9 +354,9 @@ class TestAsyncFileHandler:
                 os.unlink(filename)
 
     @pytest.mark.asyncio
-    async def test_directory_not_exists(self) -> None:
+    async def test_directory_not_exists(self, tmp_path: Path) -> None:
         """Test handler with non-existent directory."""
-        dirname = "/tmp/non_existent_dir"
+        dirname = str(tmp_path / "non_existent_dir")
         filename = os.path.join(dirname, "test.log")
 
         # Make sure the directory doesn't exist
@@ -393,8 +409,13 @@ class TestExecutorGoneFallback:
     def _create_test_record(self) -> logging.LogRecord:
         """Create a test log record."""
         return logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="Fallback message", args=(), exc_info=None
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="Fallback message",
+            args=(),
+            exc_info=None,
         )
 
     @pytest.mark.asyncio

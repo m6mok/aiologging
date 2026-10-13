@@ -13,8 +13,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import aiologging
-from aiologging import AsyncLogger, getLogger
+import aiologging.legacy as aiologging
+from aiologging.legacy import AsyncLogger, getLogger
 from aiologging.exceptions import ContextError
 from aiologging.handlers.base import AsyncHandler
 from aiologging.handlers.stream import AsyncStreamHandler
@@ -326,9 +326,7 @@ class TestLogMethods:
         async def deny() -> bool:
             return False
 
-        logger, handler = make_logger(
-            rate_limiter=deny, enable_metrics=True
-        )
+        logger, handler = make_logger(rate_limiter=deny, enable_metrics=True)
         await logger.info("dropped")
         assert handler.records == []
         assert logger.get_metrics()["records_dropped"] == 1
@@ -716,9 +714,7 @@ class TestLoggerManager:
 
     def test_get_child(self) -> None:
         assert getLogger("app").getChild("db") is getLogger("app.db")
-        assert getLogger("app").getChild("db.pool") is getLogger(
-            "app.db.pool"
-        )
+        assert getLogger("app").getChild("db.pool") is getLogger("app.db.pool")
         assert getLogger().getChild("top") is getLogger("top")
 
     def test_get_children(self) -> None:

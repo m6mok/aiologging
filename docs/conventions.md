@@ -2,15 +2,12 @@
 
 ## Typing
 
-- **mypy strict with `python_version = "3.9"`** (`[tool.mypy]` in
+- **mypy strict with `python_version = "3.11"`** (`[tool.mypy]` in
   `pyproject.toml`). Everything in `aiologging/` must type-check on
-  3.9 semantics:
-  - no `X | Y` unions or `list[str]` in runtime positions — use
-    `typing.Optional/Union/List/Dict` (modern syntax is fine inside
-    `from __future__ import annotations` files, but stay consistent
-    with the surrounding code);
-  - `ParamSpec` / `TypeAlias` come from `typing_extensions` under a
-    `sys.version_info` check (see the top of `types.py`);
+  3.11 semantics:
+  - modern unions and collection generics are supported;
+  - prefer collections.abc for runtime protocols, and keep optional
+    dependencies out of the core;
   - all functions fully annotated, including tests' helper functions
     when practical (only `aiologging/` is mypy-checked).
 - Public callable contracts are `Protocol` classes in `types.py`
@@ -59,17 +56,18 @@
   and pass structured context as keywords
   (`NetworkError(..., url=…, status_code=…)`); they land in
   `.details` and as attributes. Never raise bare `Exception`.
-- **Locks** — use `utils.LazyLock`, not `asyncio.Lock()`, in any
-  constructor that may run without a running event loop (Python 3.9
-  binds a Lock to the loop at construction time).
-- **Error handling in handlers** — never let logging crash the app:
-  catch, count in metrics, route through
-  `handle_error_with_fallback` / the configured `error_handler`,
-  fall back to `sys.stderr.write`.
+- **Resource ownership** — async resources are created on the library loop.
+  OS recipient locks span I/O and ACK. Do not use expiry to steal a live
+  sender's task. Legacy Async* implementations still use utils.LazyLock.
+- **Acceptance and delivery errors** — never return false acceptance.
+  Producer failures raise and diagnose on stderr. Delivery failures preserve
+  the journal task and diagnose; confirmed handlers propagate write errors
+  instead of swallowing them. Legacy Async* handlers retain their historical
+  handle_error_with_fallback behaviour only in the compatibility API.
 - **Secrets** — must not leak into exception text or `repr`. For
   URL-embedded secrets override `_redacted_url()`
   (see `AsyncTelegramHandler`).
-- **Buffered handlers** — implement `emit()` as
+- **Legacy buffered handlers** — implement `emit()` as
   `await self.handle(record)` and a no-op `_emit()`; real sending
   happens in `flush(records)`. The base class owns buffering,
   auto-flush and retries.
